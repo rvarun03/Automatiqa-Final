@@ -451,7 +451,31 @@ const RecordAndPlay: React.FC<RecordAndPlayProps> = ({ project, user, onUpdatePr
 
   // Real-time mobile mirroring states
   const [liveMobileFrame, setLiveMobileFrame] = useState<string | null>(null);
+  const recordedMobileFrameRef = useRef<string | null>(null);
   const [mobileError, setMobileError] = useState<string | null>(null);
+
+  // Keep a compact recording frame separate from the full-resolution live feed.
+  // This gives every action an authentic historical frame without duplicating
+  // multi-megabyte PNGs and exhausting browser/server memory.
+  useEffect(() => {
+    if (!liveMobileFrame || platform !== 'mobile' || !isRecordingRef.current) return;
+    let cancelled = false;
+    const image = new Image();
+    image.onload = () => {
+      if (cancelled) return;
+      const maxWidth = 540;
+      const scale = Math.min(1, maxWidth / Math.max(1, image.naturalWidth));
+      const canvas = document.createElement('canvas');
+      canvas.width = Math.max(1, Math.round(image.naturalWidth * scale));
+      canvas.height = Math.max(1, Math.round(image.naturalHeight * scale));
+      const context = canvas.getContext('2d');
+      if (!context) return;
+      context.drawImage(image, 0, 0, canvas.width, canvas.height);
+      recordedMobileFrameRef.current = canvas.toDataURL('image/jpeg', 0.58);
+    };
+    image.src = liveMobileFrame;
+    return () => { cancelled = true; };
+  }, [liveMobileFrame, platform]);
 
   // Mobile Live Recording Inspector States
   const [isMobileInspectorActive, setIsMobileInspectorActive] = useState<boolean>(true);
@@ -1554,7 +1578,13 @@ const RecordAndPlay: React.FC<RecordAndPlayProps> = ({ project, user, onUpdatePr
               if (stepsData.success && Array.isArray(stepsData.steps) && stepsData.steps.length > 0) {
                 setCurrentSteps(prev => {
                   const existingIds = new Set(prev.map(s => s.id));
-                  const newSteps = stepsData.steps.filter((s: any) => !existingIds.has(s.id));
+                  const newSteps = stepsData.steps
+                    .filter((s: any) => !existingIds.has(s.id))
+                    .map((step: any) => (
+                      step.screenshot || !recordedMobileFrameRef.current
+                        ? step
+                        : { ...step, screenshot: recordedMobileFrameRef.current }
+                    ));
                   if (newSteps.length > 0) {
                     console.log(`[Mobile Sync] Polled and merged ${newSteps.length} physical emulator steps.`);
                     return [...prev, ...newSteps];
@@ -2044,6 +2074,9 @@ const RecordAndPlay: React.FC<RecordAndPlayProps> = ({ project, user, onUpdatePr
     // "click". Normalize them so the later UIAutomator result can enrich the
     // instant coordinate placeholder instead of creating a second step.
     if (eventData?.action === 'tap') eventData.action = 'click';
+    if (eventData?.platform === 'mobile' && !eventData.screenshot && !eventData.image && recordedMobileFrameRef.current) {
+      eventData.screenshot = recordedMobileFrameRef.current;
+    }
     // Use refs for immediate access to current state
     const recording = isRecordingRef.current;
     const paused = isPausedRef.current;
@@ -7845,7 +7878,6 @@ ${currentSteps.map(step => formatStepToScript(step, 'web')).join('\n')}
                         isClicking={isClicking}
                         activeTypingText={activeTypingText}
                         stepScreenshots={playbackStepScreenshots}
-                        liveFrame={liveMobileFrame}
                         viewMode={playbackViewMode === 'screenshot' ? 'screenshot' : 'interactive'}
                         onToggleViewMode={(m) => setPlaybackViewMode(m === 'screenshot' ? 'screenshot' : 'iframe')}
                         showInteractionOverlay={showInteractionOverlay}

@@ -157,7 +157,6 @@ export interface MobilePlaybackEmulatorProps {
   isClicking: boolean;
   activeTypingText?: string;
   stepScreenshots?: Record<string, string>;
-  liveFrame?: string | null;
   viewMode?: 'interactive' | 'screenshot';
   onToggleViewMode?: (mode: 'interactive' | 'screenshot') => void;
   showInteractionOverlay?: boolean;
@@ -172,7 +171,6 @@ export const MobilePlaybackEmulator: React.FC<MobilePlaybackEmulatorProps> = ({
   isClicking,
   activeTypingText = '',
   stepScreenshots = {},
-  liveFrame = null,
   viewMode = 'interactive',
   onToggleViewMode,
   showInteractionOverlay = true
@@ -386,8 +384,7 @@ export const MobilePlaybackEmulator: React.FC<MobilePlaybackEmulatorProps> = ({
     (currentStep ? flow?.stepScreenshots?.[currentStep.id] : undefined) ||
     (flow?.screenshots && flow.screenshots[currentStepIndex]) || 
     Object.values(stepScreenshots)[currentStepIndex] ||
-    Object.values(flow?.stepScreenshots || {})[currentStepIndex] ||
-    liveFrame;
+    Object.values(flow?.stepScreenshots || {})[currentStepIndex];
 
   // Target element bounding box for active step
   const targetMetrics = useMemo(() => {
