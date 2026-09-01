@@ -157,6 +157,7 @@ export interface MobilePlaybackEmulatorProps {
   isClicking: boolean;
   activeTypingText?: string;
   stepScreenshots?: Record<string, string>;
+  liveFrame?: string | null;
   viewMode?: 'interactive' | 'screenshot';
   onToggleViewMode?: (mode: 'interactive' | 'screenshot') => void;
   showInteractionOverlay?: boolean;
@@ -171,6 +172,7 @@ export const MobilePlaybackEmulator: React.FC<MobilePlaybackEmulatorProps> = ({
   isClicking,
   activeTypingText = '',
   stepScreenshots = {},
+  liveFrame = null,
   viewMode = 'interactive',
   onToggleViewMode,
   showInteractionOverlay = true
@@ -381,8 +383,11 @@ export const MobilePlaybackEmulator: React.FC<MobilePlaybackEmulatorProps> = ({
   // Determine active screenshot if available
   const activeScreenshot = currentStep?.screenshot || 
     (currentStep ? stepScreenshots[currentStep.id] : undefined) || 
+    (currentStep ? flow?.stepScreenshots?.[currentStep.id] : undefined) ||
     (flow?.screenshots && flow.screenshots[currentStepIndex]) || 
-    Object.values(stepScreenshots)[currentStepIndex];
+    Object.values(stepScreenshots)[currentStepIndex] ||
+    Object.values(flow?.stepScreenshots || {})[currentStepIndex] ||
+    liveFrame;
 
   // Target element bounding box for active step
   const targetMetrics = useMemo(() => {
@@ -444,7 +449,7 @@ export const MobilePlaybackEmulator: React.FC<MobilePlaybackEmulatorProps> = ({
         <div className="flex-1 bg-slate-900 relative overflow-hidden flex flex-col">
           
           {/* Mode A: Direct Captured Screenshot View (if mode is set to screenshot and screenshot exists) */}
-          {viewMode === 'screenshot' && activeScreenshot ? (
+          {activeScreenshot ? (
             <div className="w-full h-full relative bg-slate-950 flex items-center justify-center overflow-hidden">
               <img
                 src={activeScreenshot}
@@ -452,6 +457,12 @@ export const MobilePlaybackEmulator: React.FC<MobilePlaybackEmulatorProps> = ({
                 className="w-full h-full object-fill object-top pointer-events-none"
                 referrerPolicy="no-referrer"
               />
+            </div>
+          ) : viewMode === 'screenshot' ? (
+            <div className="w-full h-full bg-slate-950 flex flex-col items-center justify-center gap-3 px-8 text-center">
+              <Video size={30} className="text-slate-600" />
+              <p className="text-[11px] font-black uppercase tracking-wider text-slate-400">Recorded device video unavailable</p>
+              <p className="text-[9px] leading-relaxed text-slate-600">Connect the mobile agent and replay or record the flow again to capture real device frames.</p>
             </div>
           ) : archetype === 'qalculate' ? (
             /* ================= ARCHETYPE: QALCULATE ANDROID CALCULATOR ================= */

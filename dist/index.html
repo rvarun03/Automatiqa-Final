@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>QAonCloud AutomatiQA</title>
+    <meta name="qa-recorder-backend-url" content="auto">
+    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100' fill='none' stroke='%2300AEEF' stroke-width='14' stroke-linecap='round'%3E%3Cpath d='M 38 18 A 38 38 0 1 1 18 38' /%3E%3Cpath d='M 65 65 L 85 85' /%3E%3C/svg%3E">
+    <script>
+      (function() {
+        window.onerror = function(message, source, lineno, colno, error) {
+          var msg = String(message || '');
+          if (msg.toLowerCase().includes('script error') || !message) {
+            console.warn('Cross-origin script error suppressed:', message);
+            return true;
+          }
+          return false;
+        };
+        window.addEventListener('error', function(event) {
+          var msg = String(event.message || (event.error && event.error.message) || '');
+          var isScriptError = msg.toLowerCase().includes('script error') || !msg;
+          var isResourceError = Boolean(event.target && event.target !== window);
+          if (isScriptError || isResourceError) {
+            console.warn('Suppressed resource or cross-origin script error:', event);
+            event.preventDefault();
+            event.stopImmediatePropagation();
+          }
+        }, true);
+        window.addEventListener('unhandledrejection', function(event) {
+          var reasonMsg = String(event.reason && event.reason.message ? event.reason.message : event.reason || '');
+          if (reasonMsg.toLowerCase().includes('script error') || !reasonMsg || reasonMsg === '[object Object]') {
+            console.warn('Suppressed unhandled rejection script error:', event.reason);
+            event.preventDefault();
+            event.stopImmediatePropagation();
+          }
+        }, true);
+      })();
+    </script>
+  <script type="module" crossorigin src="/assets/index-BpqymJaT.js"></script>
+  <link rel="stylesheet" crossorigin href="/assets/index-Bn5aKhay.css">
+</head>
+<body>
+    <div id="root"></div>
+</body>
+</html>

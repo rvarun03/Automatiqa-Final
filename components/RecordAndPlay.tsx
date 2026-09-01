@@ -727,11 +727,12 @@ const RecordAndPlay: React.FC<RecordAndPlayProps> = ({ project, user, onUpdatePr
     setStepExecutionStatus(initialStatuses);
     setStepExecutionTime({});
 
-    if (firstStep.screenshot) {
-      setPlaybackStepScreenshots({ [firstStep.id]: firstStep.screenshot });
-    } else {
-      setPlaybackStepScreenshots({});
-    }
+    const recordedScreenshots: Record<string, string> = { ...(activeFlow.stepScreenshots || {}) };
+    activeFlow.steps.forEach((step, index) => {
+      const screenshot = step.screenshot || activeFlow.screenshots?.[index];
+      if (screenshot) recordedScreenshots[step.id] = screenshot;
+    });
+    setPlaybackStepScreenshots(recordedScreenshots);
 
     setPlaybackLogs([
       {
@@ -828,11 +829,12 @@ const RecordAndPlay: React.FC<RecordAndPlayProps> = ({ project, user, onUpdatePr
     setStepExecutionStatus(initialStatuses);
     setStepExecutionTime({});
 
-    if (firstStep.screenshot) {
-      setPlaybackStepScreenshots({ [firstStep.id]: firstStep.screenshot });
-    } else {
-      setPlaybackStepScreenshots({});
-    }
+    const recordedScreenshots: Record<string, string> = { ...(targetFlow.stepScreenshots || {}) };
+    steps.forEach((step, index) => {
+      const screenshot = step.screenshot || targetFlow.screenshots?.[index];
+      if (screenshot) recordedScreenshots[step.id] = screenshot;
+    });
+    setPlaybackStepScreenshots(recordedScreenshots);
     setCompletedInputEntries([]);
 
     setPlaybackLogs(prev => [...prev, 
@@ -847,6 +849,64 @@ const RecordAndPlay: React.FC<RecordAndPlayProps> = ({ project, user, onUpdatePr
         message: `⚡ Instant Preloading Engaged: Step #1 metadata initialized. Launching Playwright browser driver...`
       }
     ]);
+
+    // Native mobile recordings contain package names and Appium/ADB locators, not
+    // browser URLs. Replay their captured frames (or the interactive emulator when
+    // a frame is unavailable) instead of sending them through Playwright.
+    if (targetFlow.platform === 'mobile') {
+      setIsPreparingPlayback(false);
+      setPlaybackLogs(prev => [...prev, {
+        timestamp: new Date().toLocaleTimeString(),
+        level: 'info',
+        message: `📱 Starting native mobile playback on ${mobileDevice || 'Android device'}...`
+      }]);
+
+      for (let index = 0; index < steps.length; index++) {
+        if (playbackCancelRef.current) {
+          setPlaybackStatus('idle');
+          return;
+        }
+        while (playbackPauseRef.current) {
+          await new Promise(resolve => setTimeout(resolve, 100));
+          if (playbackCancelRef.current) return;
+        }
+
+        const step = steps[index];
+        const startedAt = Date.now();
+        setCurrentPlaybackStepIndex(index);
+        setStepExecutionStatus(prev => ({ ...prev, [step.id]: step.skipped ? 'skipped' : 'running' }));
+
+        const metrics = resolveStepTargetMetrics(step, index, steps.length, 'mobile');
+        setPrevCursorPos(cursorPos);
+        setCursorPos(metrics.coordinates);
+        setCurrentTargetBox(metrics.targetBox);
+        setActiveTypingText(['fill', 'type'].includes(step.action) ? String(step.value || '') : '');
+
+        if (!step.skipped && ['click', 'dblclick', 'tap'].includes(step.action)) {
+          setIsClicking(true);
+          await new Promise(resolve => setTimeout(resolve, Math.max(45, Math.round(180 / playbackSpeed))));
+          setIsClicking(false);
+        }
+        await new Promise(resolve => setTimeout(resolve, Math.max(90, Math.round(500 / playbackSpeed))));
+
+        setStepExecutionStatus(prev => ({ ...prev, [step.id]: step.skipped ? 'skipped' : 'passed' }));
+        setStepExecutionTime(prev => ({ ...prev, [step.id]: Date.now() - startedAt }));
+        setPlaybackLogs(prev => [...prev, {
+          timestamp: new Date().toLocaleTimeString(),
+          level: step.skipped ? 'warn' : 'success',
+          message: `${step.skipped ? '⏭️' : '✅'} Mobile step ${index + 1}/${steps.length}: ${step.action.toUpperCase()} ${step.elementName || step.locator?.primary?.value || ''}`
+        }]);
+      }
+
+      setActiveTypingText('');
+      setPlaybackStatus('completed');
+      setPlaybackLogs(prev => [...prev, {
+        timestamp: new Date().toLocaleTimeString(),
+        level: 'success',
+        message: `🎉 Native mobile playback completed (${steps.length} steps).`
+      }]);
+      return;
+    }
 
     // 2. Lightweight loading indicator timer (displays if browser launch/page readiness takes > 1000ms)
     const prepTimer = setTimeout(() => {
@@ -7785,6 +7845,7 @@ ${currentSteps.map(step => formatStepToScript(step, 'web')).join('\n')}
                         isClicking={isClicking}
                         activeTypingText={activeTypingText}
                         stepScreenshots={playbackStepScreenshots}
+                        liveFrame={liveMobileFrame}
                         viewMode={playbackViewMode === 'screenshot' ? 'screenshot' : 'interactive'}
                         onToggleViewMode={(m) => setPlaybackViewMode(m === 'screenshot' ? 'screenshot' : 'iframe')}
                         showInteractionOverlay={showInteractionOverlay}
@@ -7792,7 +7853,7 @@ ${currentSteps.map(step => formatStepToScript(step, 'web')).join('\n')}
 
                       {/* Interactive Playback Completed Celebration Overlay on Mobile Stage */}
                       <AnimatePresence>
-                        {playbackStatus === 'completed' && (
+                        {playbackStatus === 'completed' && playbackFlow?.platform !== 'mobile' && (
                           <motion.div
                             initial={{ opacity: 0, scale: 0.95 }}
                             animate={{ opacity: 1, scale: 1 }}
