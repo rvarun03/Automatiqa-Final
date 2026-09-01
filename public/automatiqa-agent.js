@@ -593,7 +593,7 @@ async function handlePhysicalEmulatorTap(deviceId, x, y) {
     console.log(`[ADB Tap Event] Detected physical tap at coordinates (${x}, ${y}) on ${deviceId}`);
     const locatorAttr = await getElementAtCoordinates(deviceId, x, y);
     
-    const labelName = locatorAttr?.text || locatorAttr?.contentDescription || locatorAttr?.resourceId || `Element at (${x}, ${y})`;
+    const labelName = getAndroidElementName(locatorAttr) || `Unlabelled Android element`;
     const playwrightCode = locatorAttr?.playwrightScript || `await driver.touchPerform([{ action: 'tap', options: { x: ${x}, y: ${y} } }]);`;
 
     const stepPayload = {
@@ -639,6 +639,18 @@ async function handlePhysicalEmulatorTap(deviceId, x, y) {
   } catch (err) {
     console.error('Failed to handle physical tap:', err.message);
   }
+}
+
+function getAndroidElementName(locatorAttr) {
+  if (!locatorAttr) return '';
+  const semanticName = locatorAttr.text || locatorAttr.contentDescription || locatorAttr.accessibilityId;
+  if (semanticName && String(semanticName).trim()) return String(semanticName).trim();
+  if (locatorAttr.resourceId) {
+    const id = String(locatorAttr.resourceId).split(/[:/]id\//).pop() || String(locatorAttr.resourceId);
+    return id.replace(/[_-]+/g, ' ').replace(/\b\w/g, c => c.toUpperCase()).trim();
+  }
+  const className = String(locatorAttr.className || '').split('.').pop();
+  return className && className !== 'View' ? className.replace(/([a-z])([A-Z])/g, '$1 $2') : '';
 }
 
 async function startHeartbeat() {
@@ -738,27 +750,30 @@ async function startStreamingAndCommandPolling() {
       if (actionRes && actionRes.actions && actionRes.actions.length > 0) {
         for (const item of actionRes.actions) {
           const { action, params } = item;
-          console.log(`Executing Action on Device ${deviceId}: ${action}`, params);
+          const actionDeviceId = params.deviceId || deviceId;
+          console.log(`Executing Action on Device ${actionDeviceId}: ${action}`, params);
 
           let cmd = '';
           let locatorAttr = null;
+          let locatorPromise = null;
 
           if (action === 'click' || action === 'tap' || action === 'double_tap' || action === 'long_press') {
-            cmd = `adb -s ${deviceId} shell input tap ${params.x} ${params.y}`;
+            cmd = `adb -s ${actionDeviceId} shell input tap ${params.x} ${params.y}`;
             if (action === 'double_tap') {
-              cmd += ` && sleep 0.1 && adb -s ${deviceId} shell input tap ${params.x} ${params.y}`;
+              cmd += ` && sleep 0.1 && adb -s ${actionDeviceId} shell input tap ${params.x} ${params.y}`;
             } else if (action === 'long_press') {
-              cmd = `adb -s ${deviceId} shell input swipe ${params.x} ${params.y} ${params.x} ${params.y} 1000`;
+              cmd = `adb -s ${actionDeviceId} shell input swipe ${params.x} ${params.y} ${params.x} ${params.y} 1000`;
             }
-            locatorAttr = await getElementAtCoordinates(deviceId, params.x, params.y);
+            // Execute live taps immediately. A UIAutomator dump can take
+            // multiple seconds and must not block the device interaction.
+            locatorPromise = getElementAtCoordinates(actionDeviceId, params.x, params.y);
           } else if (action === 'type' || action === 'fill') {
             const escaped = (params.text || '').replace(/ /g, '%s');
-            cmd = `adb -s ${deviceId} shell input text "${escaped}"`;
-            locatorAttr = await getElementAtCoordinates(deviceId, params.x || 300, params.y || 300);
+            cmd = `adb -s ${actionDeviceId} shell input text "${escaped}"`;
           } else if (action === 'clear') {
-            cmd = `adb -s ${deviceId} shell input keyevent 67`.repeat(25).replace(/adb/g, '&& adb').substring(3);
+            cmd = `adb -s ${actionDeviceId} shell input keyevent 67`.repeat(25).replace(/adb/g, '&& adb').substring(3);
           } else if (action === 'swipe' || action === 'scroll') {
-            cmd = `adb -s ${deviceId} shell input swipe ${params.x1} ${params.y1} ${params.x2} ${params.y2} ${params.duration || 300}`;
+            cmd = `adb -s ${actionDeviceId} shell input swipe ${params.x1} ${params.y1} ${params.x2} ${params.y2} ${params.duration || 300}`;
           } else if (action === 'press') {
             let keycode = 4; // Back default
             if (params.key === 'Home') keycode = 3;
@@ -767,7 +782,7 @@ async function startStreamingAndCommandPolling() {
             else if (params.key === 'VolumeDown') keycode = 25;
             else if (params.key === 'Power') keycode = 26;
             else if (params.key === 'Enter') keycode = 66;
-            cmd = `adb -s ${deviceId} shell input keyevent ${keycode}`;
+            cmd = `adb -s ${actionDeviceId} shell input keyevent ${keycode}`;
           } else if (action === 'launch' || action === 'launch_app' || action === 'open_app') {
             const pkg = params.packageName || 'com.machaxi.app';
             const targetDev = (params.deviceId && !params.deviceId.includes(' ') && params.deviceId.length < 30) ? params.deviceId : deviceId;
@@ -816,14 +831,20 @@ async function startStreamingAndCommandPolling() {
           if (cmd) {
             await runCmd(cmd);
 
+            // Resolve the node after the ADB command has already been sent. The
+            // promise started before the tap, so it describes the tapped screen.
+            if (locatorPromise) {
+              locatorAttr = await locatorPromise.catch(() => null);
+            }
+
             await postJson(`${serverUrl}/api/device-agent/upload-logs`, {
               email: userEmail,
-              log: `[ADB] Executed ${action.toUpperCase()} on target device ${deviceId}`,
+              log: `[ADB] Executed ${action.toUpperCase()} on target device ${actionDeviceId}`,
               type: 'info',
               url: 'ADB'
             }).catch(() => {});
 
-            const labelName = locatorAttr?.text || locatorAttr?.contentDescription || locatorAttr?.resourceId || `Coordinates (${params.x || params.x1 || 0}, ${params.y || params.y1 || 0})`;
+            const labelName = getAndroidElementName(locatorAttr) || 'Unlabelled Android element';
             const stepPayload = {
               email: userEmail,
               event: {
@@ -835,7 +856,11 @@ async function startStreamingAndCommandPolling() {
                   primary: {
                     type: locatorAttr?.primaryType || 'xpath',
                     value: locatorAttr?.primaryValue || locatorAttr?.xpath || `//android.view.View`,
-                    playwright: locatorAttr?.playwrightScript || (action === 'click' ? `await driver.elementByXPath("//android.view.View").click();` : `await driver.pressKeyCode(4);`)
+                    playwright: locatorAttr?.playwrightScript || ((action === 'click' || action === 'tap')
+                      ? `await driver.touchPerform([{ action: 'tap', options: { x: ${params.x}, y: ${params.y} } }]);`
+                      : action === 'fill' || action === 'type'
+                        ? `await driver.keys("${params.text || ''}");`
+                        : `await driver.pressKeyCode(4);`)
                   },
                   alternatives: [
                     locatorAttr?.text ? { type: 'text', value: locatorAttr.text } : null,
@@ -846,6 +871,8 @@ async function startStreamingAndCommandPolling() {
                 },
                 screen: "ActiveScreen",
                 platform: 'mobile',
+                x: params.x,
+                y: params.y,
                 timestamp: Date.now()
               }
             };

@@ -1292,7 +1292,7 @@ const RecordAndPlay: React.FC<RecordAndPlayProps> = ({ project, user, onUpdatePr
         body: JSON.stringify({
           email: user?.email || 'sowbarnya@qaoncloud.com',
           action,
-          params
+          params: { ...params, deviceId: mobileDevice }
         })
       });
     } catch (e) {
@@ -1472,18 +1472,17 @@ const RecordAndPlay: React.FC<RecordAndPlayProps> = ({ project, user, onUpdatePr
       interval = setInterval(async () => {
         try {
           const userEmail = encodeURIComponent(user?.email || 'sowbarnya@qaoncloud.com');
-          // Socket.IO is the primary live stream. Polling at the same time causes
-          // redundant frame swaps and visible flicker on Linux/Chromium.
-          if (!socketRef.current?.connected) {
-            const res = await fetch(`/api/device-agent/live-frame?email=${userEmail}`);
-            if (res.ok && res.headers.get('content-type')?.includes('application/json')) {
-              const data = await res.json();
-              if (data.success && data.frame) {
-                setLiveMobileFrame(current => current === data.frame ? current : data.frame);
-                setMobileError(null);
-              } else if (data.error && typeof data.error === 'string' && data.error.includes("Appium")) {
-                setMobileError("Unable to start Appium. Verify Appium installation and Device Agent status.");
-              }
+          // Keep a polling fallback active even while Socket.IO is connected.
+          // A connected socket can miss a frame during reconnect/session changes;
+          // comparing the data URL prevents redundant React frame swaps.
+          const res = await fetch(`/api/device-agent/live-frame?email=${userEmail}`);
+          if (res.ok && res.headers.get('content-type')?.includes('application/json')) {
+            const data = await res.json();
+            if (data.success && data.frame) {
+              setLiveMobileFrame(current => current === data.frame ? current : data.frame);
+              setMobileError(null);
+            } else if (data.error && typeof data.error === 'string' && data.error.includes("Appium")) {
+              setMobileError("Unable to start Appium. Verify Appium installation and Device Agent status.");
             }
           }
 
@@ -1851,6 +1850,11 @@ const RecordAndPlay: React.FC<RecordAndPlayProps> = ({ project, user, onUpdatePr
     return null;
   });
   const socketRef = useRef<any>(null);
+  const userEmailRef = useRef((user?.email || 'sowbarnya@qaoncloud.com').toLowerCase());
+
+  useEffect(() => {
+    userEmailRef.current = (user?.email || 'sowbarnya@qaoncloud.com').toLowerCase();
+  }, [user?.email]);
   const isRecordingRef = useRef(false);
   const isPausedRef = useRef(false);
   const sessionIdRef = useRef<string | null>(null);
@@ -1976,6 +1980,10 @@ const RecordAndPlay: React.FC<RecordAndPlayProps> = ({ project, user, onUpdatePr
   };
 
   const addRecordedStep = (eventData: any) => {
+    // The device agent calls Android taps "tap" while the recorder UI uses
+    // "click". Normalize them so the later UIAutomator result can enrich the
+    // instant coordinate placeholder instead of creating a second step.
+    if (eventData?.action === 'tap') eventData.action = 'click';
     // Use refs for immediate access to current state
     const recording = isRecordingRef.current;
     const paused = isPausedRef.current;
@@ -2052,6 +2060,28 @@ const RecordAndPlay: React.FC<RecordAndPlayProps> = ({ project, user, onUpdatePr
 
     setCurrentSteps(prev => {
       const lastStep = prev[prev.length - 1];
+
+      // Live taps are added immediately with a coordinate label. The desktop
+      // agent resolves the real Android node concurrently and sends it shortly
+      // afterwards; replace the placeholder while preserving its position/id.
+      const isCoordinatePlaceholder = lastStep?.platform === 'mobile' &&
+        lastStep.action === 'click' &&
+        (/^(Tap|Element) at \(\d+,\s*\d+\)$/i.test(lastStep.elementName || '') ||
+         lastStep.elementName === 'Resolving Android element…');
+      const hasResolvedMobileName = eventData.platform === 'mobile' &&
+        eventData.action === 'click' &&
+        eventData.elementName &&
+        !/^(?:Tap at|Element at|Coordinates) \(/i.test(eventData.elementName);
+      if (isCoordinatePlaceholder && hasResolvedMobileName &&
+          Date.now() - (lastStep.timestamp || 0) < 10000) {
+        return [...prev.slice(0, -1), {
+          ...lastStep,
+          elementName: eventData.elementName,
+          locator: eventData.locator || lastStep.locator,
+          value: eventData.value ?? lastStep.value,
+          screen: eventData.screen || lastStep.screen
+        }];
+      }
       
       // Avoid immediate identical navigate events to the same URL
       if (lastStep && lastStep.action === 'navigate' && eventData.action === 'navigate') {
@@ -2395,7 +2425,7 @@ const RecordAndPlay: React.FC<RecordAndPlayProps> = ({ project, user, onUpdatePr
     });
 
     socket.on('MOBILE_FRAME', (data: any) => {
-      const currentUserEmail = (user?.email || 'sowbarnya@qaoncloud.com').toLowerCase();
+      const currentUserEmail = userEmailRef.current;
       const frameEmail = String(data?.email || '').toLowerCase();
       // MOBILE_FRAME is broadcast server-wide; never let another user's agent
       // replace this recorder's device screen.
@@ -2685,6 +2715,12 @@ const RecordAndPlay: React.FC<RecordAndPlayProps> = ({ project, user, onUpdatePr
       isPausedRef.current = false;
       setRecordingDuration(0);
       setShowLiveRecorder(true);
+
+      // Stopping a previous recording disconnects the shared socket. Reconnect
+      // it for every new mobile session so physical ADB taps can reach the UI.
+      if (socketRef.current && !socketRef.current.connected) {
+        socketRef.current.connect();
+      }
 
       // Step 5: Startup Logs
       const startupLogs: any[] = [];

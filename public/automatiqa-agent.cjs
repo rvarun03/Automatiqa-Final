@@ -266,6 +266,18 @@ function getJson(urlStr) {
   });
 }
 
+function getAndroidElementName(locatorAttr) {
+  if (!locatorAttr) return '';
+  const semanticName = locatorAttr.text || locatorAttr.contentDescription || locatorAttr.accessibilityId;
+  if (semanticName && String(semanticName).trim()) return String(semanticName).trim();
+  if (locatorAttr.resourceId) {
+    const id = String(locatorAttr.resourceId).split(/[:\/]id\//).pop() || String(locatorAttr.resourceId);
+    return id.replace(/[_-]+/g, ' ').replace(/\b\w/g, c => c.toUpperCase()).trim();
+  }
+  const className = String(locatorAttr.className || '').split('.').pop();
+  return className && className !== 'View' ? className.replace(/([a-z])([A-Z])/g, '$1 $2') : '';
+}
+
 let agentRunning = true;
 let activeRecordingSession = null;
 let lastUploadedFrameTime = 0;
@@ -323,27 +335,29 @@ async function startStreamingAndCommandPolling() {
       if (actionRes && actionRes.actions && actionRes.actions.length > 0) {
         for (const item of actionRes.actions) {
           const { action, params } = item;
-          console.log(`Executing Action on Device ${deviceId}: ${action}`, params);
+          const actionDeviceId = params.deviceId || deviceId;
+          console.log(`Executing Action on Device ${actionDeviceId}: ${action}`, params);
 
           let cmd = '';
           let locatorAttr = null;
+          let locatorPromise = null;
 
           if (action === 'click' || action === 'tap' || action === 'double_tap' || action === 'long_press') {
-            cmd = `adb -s ${deviceId} shell input tap ${params.x} ${params.y}`;
+            cmd = `adb -s ${actionDeviceId} shell input tap ${params.x} ${params.y}`;
             if (action === 'double_tap') {
-              cmd += ` && sleep 0.1 && adb -s ${deviceId} shell input tap ${params.x} ${params.y}`;
+              cmd += ` && sleep 0.1 && adb -s ${actionDeviceId} shell input tap ${params.x} ${params.y}`;
             } else if (action === 'long_press') {
-              cmd = `adb -s ${deviceId} shell input swipe ${params.x} ${params.y} ${params.x} ${params.y} 1000`;
+              cmd = `adb -s ${actionDeviceId} shell input swipe ${params.x} ${params.y} ${params.x} ${params.y} 1000`;
             }
-            locatorAttr = await getElementAtCoordinates(deviceId, params.x, params.y);
+            // Do not block the actual tap on a slow UIAutomator hierarchy dump.
+            locatorPromise = getElementAtCoordinates(actionDeviceId, params.x, params.y);
           } else if (action === 'type' || action === 'fill') {
             const escaped = (params.text || '').replace(/ /g, '%s');
-            cmd = `adb -s ${deviceId} shell input text "${escaped}"`;
-            locatorAttr = await getElementAtCoordinates(deviceId, params.x || 300, params.y || 300);
+            cmd = `adb -s ${actionDeviceId} shell input text "${escaped}"`;
           } else if (action === 'clear') {
-            cmd = `adb -s ${deviceId} shell input keyevent 67`.repeat(25).replace(/adb/g, '&& adb').substring(3);
+            cmd = `adb -s ${actionDeviceId} shell input keyevent 67`.repeat(25).replace(/adb/g, '&& adb').substring(3);
           } else if (action === 'swipe' || action === 'scroll') {
-            cmd = `adb -s ${deviceId} shell input swipe ${params.x1} ${params.y1} ${params.x2} ${params.y2} ${params.duration || 300}`;
+            cmd = `adb -s ${actionDeviceId} shell input swipe ${params.x1} ${params.y1} ${params.x2} ${params.y2} ${params.duration || 300}`;
           } else if (action === 'press') {
             let keycode = 4; // Back default
             if (params.key === 'Home') keycode = 3;
@@ -352,7 +366,7 @@ async function startStreamingAndCommandPolling() {
             else if (params.key === 'VolumeDown') keycode = 25;
             else if (params.key === 'Power') keycode = 26;
             else if (params.key === 'Enter') keycode = 66;
-            cmd = `adb -s ${deviceId} shell input keyevent ${keycode}`;
+            cmd = `adb -s ${actionDeviceId} shell input keyevent ${keycode}`;
           } else if (action === 'launch' || action === 'launch_app' || action === 'open_app') {
             const pkg = params.packageName || 'com.android.chrome';
             cmd = `adb -s ${deviceId} shell monkey -p ${pkg} -c android.intent.category.LAUNCHER 1`;
@@ -365,14 +379,18 @@ async function startStreamingAndCommandPolling() {
           if (cmd) {
             await runCmd(cmd);
 
+            if (locatorPromise) {
+              locatorAttr = await locatorPromise.catch(() => null);
+            }
+
             await postJson(`${serverUrl}/api/device-agent/upload-logs`, {
               email: userEmail,
-              log: `[ADB] Executed ${action.toUpperCase()} on target device ${deviceId}`,
+              log: `[ADB] Executed ${action.toUpperCase()} on target device ${actionDeviceId}`,
               type: 'info',
               url: 'ADB'
             });
 
-            const labelName = locatorAttr?.text || locatorAttr?.contentDescription || locatorAttr?.resourceId || `Coordinates (${params.x || params.x1 || 0}, ${params.y || params.y1 || 0})`;
+            const labelName = getAndroidElementName(locatorAttr) || 'Unlabelled Android element';
             const stepPayload = {
               email: userEmail,
               event: {
@@ -384,7 +402,11 @@ async function startStreamingAndCommandPolling() {
                   primary: {
                     type: locatorAttr?.accessibilityId ? 'accessibility-id' : locatorAttr?.resourceId ? 'resource-id' : 'xpath',
                     value: locatorAttr?.accessibilityId || locatorAttr?.resourceId || locatorAttr?.xpath || `//android.view.View`,
-                    playwright: action === 'click' ? `await driver.elementByAccessibilityId("${locatorAttr?.accessibilityId || 'element'}").click();` : `await driver.pressKeyCode(4);`
+                    playwright: (action === 'click' || action === 'tap')
+                      ? `await driver.touchPerform([{ action: 'tap', options: { x: ${params.x}, y: ${params.y} } }]);`
+                      : action === 'fill' || action === 'type'
+                        ? `await driver.keys("${params.text || ''}");`
+                        : `await driver.pressKeyCode(4);`
                   },
                   alternatives: [
                     locatorAttr?.accessibilityId ? { type: 'accessibility-id', value: locatorAttr.accessibilityId } : null,
@@ -394,6 +416,8 @@ async function startStreamingAndCommandPolling() {
                 },
                 screen: "ActiveScreen",
                 platform: 'mobile',
+                x: params.x,
+                y: params.y,
                 timestamp: Date.now()
               }
             };

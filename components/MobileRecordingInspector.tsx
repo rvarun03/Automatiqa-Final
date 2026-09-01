@@ -4250,9 +4250,7 @@ export const MobileRecordingInspector: React.FC<MobileRecordingInspectorProps> =
     onRecordElement(enrichedElem, action, value, e, extraMetrics);
   };
 
-  const handleLiveFrameClick = async (e: React.MouseEvent<HTMLImageElement>) => {
-    if (!isInspectorActive) return;
-
+  const handleLiveFrameClick = async (e: React.PointerEvent<HTMLImageElement>) => {
     const image = e.currentTarget;
     const rect = image.getBoundingClientRect();
     const naturalWidth = image.naturalWidth || 1080;
@@ -4272,6 +4270,37 @@ export const MobileRecordingInspector: React.FC<MobileRecordingInspectorProps> =
     const deviceY = Math.round(localY / imageScale);
     triggerTouchRipple(e.clientX - rect.left, e.clientY - rect.top);
 
+    // Record and dispatch the tap synchronously. The live screenshot refreshes
+    // several times a second, so waiting for a hierarchy request before calling
+    // onRecordElement can cause the browser click to be lost altogether.
+    const coordinateElem: MobileElementInfo = {
+      id: `coordinate-${deviceX}-${deviceY}-${Date.now()}`,
+      name: 'Resolving Android element…',
+      type: 'android.view.View',
+      resourceId: '',
+      xpath: `//android.view.View[@bounds="[${deviceX},${deviceY}]"]`,
+      bounds: `[${deviceX},${deviceY}][${deviceX},${deviceY}]`,
+      screen: activeTab || 'MAIN',
+      clickable: true,
+      enabled: true
+    };
+    const action = inspectorMode === 'type' ? 'fill' : inspectorMode === 'assert' ? 'assertion' : inspectorMode === 'long_press' ? 'long_press' : 'click';
+    const coordinateMetrics = {
+      targetBox: {
+        x: Number(((deviceX / naturalWidth) * 100).toFixed(1)),
+        y: Number(((deviceY / naturalHeight) * 100).toFixed(1)),
+        width: 1,
+        height: 1
+      },
+      coordinates: {
+        x: Number(((deviceX / naturalWidth) * 100).toFixed(1)),
+        y: Number(((deviceY / naturalHeight) * 100).toFixed(1))
+      }
+    };
+    setSelectedElement(coordinateElem);
+    onRecordElement(coordinateElem, action, inspectorMode === 'type' ? inspectorInputText : undefined, e, coordinateMetrics);
+
+    // Locator enrichment is best-effort and must never gate step capture.
     try {
       const email = encodeURIComponent(mobileUserEmail || 'shanmugapriya@qaoncloud.com');
       const response = await fetch(`/api/mobile/app/source?email=${email}`);
@@ -4294,10 +4323,7 @@ export const MobileRecordingInspector: React.FC<MobileRecordingInspectorProps> =
       const match = (clickableCandidates.length ? clickableCandidates : candidates)
         .sort((a, b) => a.area - b.area)[0];
 
-      if (!match) {
-        toast.warning(`No UIAutomator element found at (${deviceX}, ${deviceY}). Try again after the next live frame.`);
-        return;
-      }
+      if (!match) throw new Error('No UIAutomator element at the tapped coordinates');
 
       const node = match.node;
       const resourceId = node.getAttribute('resource-id') || '';
@@ -4309,7 +4335,7 @@ export const MobileRecordingInspector: React.FC<MobileRecordingInspectorProps> =
         : accessibilityId
           ? `@content-desc="${accessibilityId}"`
           : `@text="${text}"`;
-      const elem: MobileElementInfo = {
+      const inspectedElem: MobileElementInfo = {
         id: resourceId || accessibilityId || `${type}-${match.x1}-${match.y1}`,
         name: text || accessibilityId || resourceId.split(':id/').pop() || type.split('.').pop() || 'Mobile Element',
         type,
@@ -4323,24 +4349,9 @@ export const MobileRecordingInspector: React.FC<MobileRecordingInspectorProps> =
         clickable: node.getAttribute('clickable') === 'true',
         enabled: node.getAttribute('enabled') !== 'false'
       };
-
-      setSelectedElement(elem);
-      const action = inspectorMode === 'type' ? 'fill' : inspectorMode === 'assert' ? 'assertion' : inspectorMode === 'long_press' ? 'long_press' : 'click';
-      const value = inspectorMode === 'type' ? inspectorInputText : elem.text;
-      onRecordElement(elem, action, value, e, {
-        targetBox: {
-          x: Number(((match.x1 / naturalWidth) * 100).toFixed(1)),
-          y: Number(((match.y1 / naturalHeight) * 100).toFixed(1)),
-          width: Number((((match.x2 - match.x1) / naturalWidth) * 100).toFixed(1)),
-          height: Number((((match.y2 - match.y1) / naturalHeight) * 100).toFixed(1))
-        },
-        coordinates: {
-          x: Number(((deviceX / naturalWidth) * 100).toFixed(1)),
-          y: Number(((deviceY / naturalHeight) * 100).toFixed(1))
-        }
-      });
+      setSelectedElement(inspectedElem);
     } catch (error: any) {
-      toast.error(error?.message || 'Could not inspect the live device element');
+      console.warn('Recording live tap with coordinate fallback:', error?.message || error);
     }
   };
 
@@ -4580,7 +4591,7 @@ export const MobileRecordingInspector: React.FC<MobileRecordingInspectorProps> =
                 <img
                   src={liveMobileFrame}
                   alt={`Live Android device ${mobileDevice}`}
-                  onClick={handleLiveFrameClick}
+                  onPointerDown={handleLiveFrameClick}
                   className={`absolute inset-0 z-[100] h-full w-full bg-black object-contain ${isInspectorActive ? 'cursor-crosshair' : 'cursor-default'}`}
                   draggable={false}
                 />
