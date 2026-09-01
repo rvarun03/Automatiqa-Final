@@ -1,0 +1,109 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // ===============================================================
+    // Global Helper Functions
+    // ===============================================================
+    
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+    
+    function isUserEmail(email) {
+      return isAuthenticated() && request.auth.token.email == email;
+    }
+    
+    function isAdmin() {
+      return isAuthenticated() && 
+        (request.auth.token.email == "shanmugapriya@qaoncloud.com" ||
+         request.auth.token.email == "sathya@qaoncloud.com" ||
+         (exists(/databases/$(database)/documents/users/$(request.auth.token.email)) &&
+          (get(/databases/$(database)/documents/users/$(request.auth.token.email)).data.role == 'Admin' ||
+           get(/databases/$(database)/documents/users/$(request.auth.token.email)).data.role == 'Super Admin')));
+    }
+
+    // ===============================================================
+    // Collection Rules
+    // ===============================================================
+
+    // 1. Users collection (keyed by user email)
+    match /users/{userEmail} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated();
+      allow update: if isAuthenticated();
+      allow delete: if isAuthenticated() && (isAdmin() || isUserEmail(userEmail));
+    }
+
+    // 2. Projects collection
+    match /projects/{projectId} {
+      allow read: if isAuthenticated();
+      allow create, update, delete: if isAuthenticated();
+    }
+
+    // 3. Notifications collection
+    match /notifications/{noteId} {
+      allow read: if isAuthenticated() && (resource.data.recipientEmail == request.auth.token.email || isAdmin());
+      allow create: if isAuthenticated();
+      allow update: if isAuthenticated() && (resource.data.recipientEmail == request.auth.token.email || isAdmin());
+      allow delete: if isAuthenticated() && (resource.data.recipientEmail == request.auth.token.email || isAdmin());
+    }
+
+    // 4. Activities collection (real-time workspace audit and telemetry logs)
+    match /activities/{activityId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated();
+      allow update, delete: if isAuthenticated() && isAdmin();
+    }
+
+    // 5. RAG Embeddings & Project Chunks
+    match /rag_embeddings/{ragId} {
+      allow read, write: if isAuthenticated();
+    }
+
+    match /projects/{projectId}/rag_chunks/{chunkId} {
+      allow read, write: if isAuthenticated();
+    }
+
+    // 6. Mobile & Performance Execution Reports
+    match /mobile_execution_runs/{runId} {
+      allow read, write: if isAuthenticated();
+    }
+
+    match /jmeter_performance_runs/{runId} {
+      allow read, write: if isAuthenticated();
+    }
+
+    // 7. AI Scenarios
+    match /ai_scenarios/{scenarioId} {
+      allow read, write: if isAuthenticated();
+    }
+
+    match /Aiscenario/{scenarioId} {
+      allow read, write: if isAuthenticated();
+    }
+
+    // 8. Token Consumption & AI Cache
+    match /token_consumption_logs/{logId} {
+      allow read, write: if true;
+    }
+
+    match /ai_cache/{cacheId} {
+      allow read, write: if true;
+    }
+
+    match /ai_history/{historyId} {
+      allow read, write: if true;
+    }
+
+    // 9. Diagnostic & Connection test
+    match /_connection_test_/{docId} {
+      allow read: if true;
+    }
+
+    // Default deny fallback
+    match /{path=**} {
+      allow read, write: if false;
+    }
+  }
+}

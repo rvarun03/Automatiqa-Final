@@ -1,0 +1,42 @@
+# Node.js & Dependency Directories
+node_modules
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+bun.lock
+
+# Build & Output Artifacts
+dist
+dist-ssr
+*.local
+
+# Environment & Secrets (Never bake secrets into container image)
+.env
+.env.*
+!.env.example
+
+# Git & Version Control
+.git
+.gitignore
+
+# IDE & Editor Settings
+.vscode
+.idea
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+.DS_Store
+Thumbs.db
+
+# Test & Coverage Reports
+coverage
+.nyc_output
+
+# Temporary Files & AI Cache
+ai_cache_store.json
+tmp
+temp
+*.log
