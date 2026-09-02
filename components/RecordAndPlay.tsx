@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useMemo } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { 
   Play, 
   Square, 
@@ -60,6 +60,8 @@ import {
   LogOut,
   Key,
   Mail,
+  ShieldCheck,
+  ShieldAlert,
   Mic,
   MapPin,
   AlertTriangle,
@@ -68,13 +70,16 @@ import {
   MousePointer,
   Target,
   ArrowRight,
-  Video
+  Video,
+  FileText,
+  UploadCloud,
+  FileCheck
 } from 'lucide-react';
 import { motion, AnimatePresence, Reorder } from 'motion/react';
 import { io } from 'socket.io-client';
 import JSZip from 'jszip';
 import { saveAs } from 'file-saver';
-import { enhanceRecordedScript, isDuplicateOfRecordedStep, pickRicherRecordedStep, deduplicateRecordedSteps } from '../geminiService';
+import { enhanceRecordedScript } from '../geminiService';
 import { 
   Project, 
   User, 
@@ -86,16 +91,23 @@ import {
   StepLocator,
   AutomationScript,
   AutomationScriptFile,
-  LaunchDiagnostic
+  LaunchDiagnostic,
+  BrowserPermissionRequest
 } from '../types';
 import { toast } from 'sonner';
 import { generateAutomationScript, GeneratedProject } from '../services/automationGenerator';
 import { MobileRecordingInspector } from './MobileRecordingInspector';
 import { MobilePlaybackEmulator } from './MobilePlaybackEmulator';
 import { RecordedVideoModal, downloadFlowVideoFile, resolveStepTargetMetrics } from './RecordedVideoModal';
+import { RecordPlayVideoUploadModal } from './RecordPlayVideoUploadModal';
 import { extractApkBundle } from '../services/apkExtractorService';
 import { detectAppArchetype } from '../services/mobileAppDefinitionService';
 import { addTokenLog } from '../services/tokenConsumptionService';
+import { 
+  BddDocumentParsed, 
+  parseBddDocument, 
+  getFrameworksForAutomation 
+} from '../utils/automationFrameworkOptions';
 
 interface RecordAndPlayProps {
   project: Project;
@@ -183,26 +195,6 @@ function sanitizeClientUrl(rawUrl: string, baseUrl?: string): string {
   }
 
   return '';
-}
-
-function isTechnicalMobileLocator(step: Partial<RecordedStep>): boolean {
-  if (step.platform !== 'mobile') return false;
-  const locator = `${step.locator?.primary?.value || ''} ${step.locator?.primary?.playwright || ''}`;
-  const isNamedNativeControl = /android\.(?:widget|view)\.(?:EditText|Button|CheckBox|RadioButton|Switch|Spinner)/i.test(locator);
-  return (/@bounds\s*=/.test(locator) && !isNamedNativeControl) ||
-    /android:id\/(?:navigationBarBackground|statusBarBackground|content)/i.test(locator) ||
-    /android\.(?:widget\.ScrollView|view\\?\.View)(?:\[|$)/i.test(step.locator?.primary?.value || '') ||
-    step.locator?.primary?.type === 'coordinates';
-}
-
-function getFriendlyMobileStepName(step: Partial<RecordedStep>): string {
-  const rawName = String(step.elementName || '').trim();
-  const isAnonymous = !rawName || /^(?:unlabelled android element|resolving android element…|screen position)$/i.test(rawName);
-  if (!isAnonymous && !isTechnicalMobileLocator(step)) return rawName;
-  if (step.action === 'fill' || step.action === 'type') return 'Text field';
-  if (step.action === 'scroll') return 'App screen';
-  if (step.action === 'click') return 'Screen position';
-  return rawName || 'App screen';
 }
 
 export type BrowserOptionId = 'chrome' | 'firefox' | 'edge' | 'safari' | 'mobile_chrome' | 'mobile_safari';
@@ -321,7 +313,6 @@ const RecordAndPlay: React.FC<RecordAndPlayProps> = ({ project, user, onUpdatePr
   }, [project.recordedFlows]);
 
   const [currentSteps, setCurrentSteps] = useState<RecordedStep[]>([]);
-  const [recordedWebStorageState, setRecordedWebStorageState] = useState<RecordedFlow['webStorageState']>();
   const [flowName, setFlowName] = useState('New Recording Flow');
   const [flowDescription, setFlowDescription] = useState('');
   const [refineInstructions, setRefineInstructions] = useState('');
@@ -330,6 +321,10 @@ const RecordAndPlay: React.FC<RecordAndPlayProps> = ({ project, user, onUpdatePr
   const [isApproved, setIsApproved] = useState(false);
   const [selectedTool, setSelectedTool] = useState<AutomationTool>('Playwright');
   const [selectedLanguage, setSelectedLanguage] = useState<ProgrammingLanguage>('TypeScript');
+  const [selectedFramework, setSelectedFramework] = useState<string>('Page Object Model (POM)');
+  const [uploadedBddDoc, setUploadedBddDoc] = useState<BddDocumentParsed | null>(null);
+  const [uploadedBddFileName, setUploadedBddFileName] = useState<string>('');
+  const [isBddUploading, setIsBddUploading] = useState<boolean>(false);
   const [isGenerating, setIsGenerating] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [generatedProject, setGeneratedProject] = useState<GeneratedProject | null>(null);
@@ -381,11 +376,6 @@ const RecordAndPlay: React.FC<RecordAndPlayProps> = ({ project, user, onUpdatePr
   const [showLiveRecorder, setShowLiveRecorder] = useState(false);
   const [showScriptPreview, setShowScriptPreview] = useState(false);
   const [recordingMode, setRecordingMode] = useState<'manual' | 'extension' | 'codegen'>('codegen');
-  // Video of the session Playwright recorded, and whether playback should show
-  // it rather than re-executing the steps against the live site.
-  const [recordedVideoUrl, setRecordedVideoUrl] = useState<string | null>(null);
-  const [playbackUsesVideo, setPlaybackUsesVideo] = useState(true);
-  const [activeVideoUrl, setActiveVideoUrl] = useState<string | null>(null);
   const [activePanel, setActivePanel] = useState<'steps' | 'script' | 'console'>('steps');
   const [mobileDisplayMode, setMobileDisplayMode] = useState<'real_emulator' | 'mirror'>('real_emulator');
   const [consoleLogs, setConsoleLogs] = useState<{type: string, message: string, timestamp: number, url: string}[]>([]);
@@ -474,31 +464,7 @@ const RecordAndPlay: React.FC<RecordAndPlayProps> = ({ project, user, onUpdatePr
 
   // Real-time mobile mirroring states
   const [liveMobileFrame, setLiveMobileFrame] = useState<string | null>(null);
-  const recordedMobileFrameRef = useRef<string | null>(null);
   const [mobileError, setMobileError] = useState<string | null>(null);
-
-  // Keep a compact recording frame separate from the full-resolution live feed.
-  // This gives every action an authentic historical frame without duplicating
-  // multi-megabyte PNGs and exhausting browser/server memory.
-  useEffect(() => {
-    if (!liveMobileFrame || platform !== 'mobile' || !isRecordingRef.current) return;
-    let cancelled = false;
-    const image = new Image();
-    image.onload = () => {
-      if (cancelled) return;
-      const maxWidth = 540;
-      const scale = Math.min(1, maxWidth / Math.max(1, image.naturalWidth));
-      const canvas = document.createElement('canvas');
-      canvas.width = Math.max(1, Math.round(image.naturalWidth * scale));
-      canvas.height = Math.max(1, Math.round(image.naturalHeight * scale));
-      const context = canvas.getContext('2d');
-      if (!context) return;
-      context.drawImage(image, 0, 0, canvas.width, canvas.height);
-      recordedMobileFrameRef.current = canvas.toDataURL('image/jpeg', 0.58);
-    };
-    image.src = liveMobileFrame;
-    return () => { cancelled = true; };
-  }, [liveMobileFrame, platform]);
 
   // Mobile Live Recording Inspector States
   const [isMobileInspectorActive, setIsMobileInspectorActive] = useState<boolean>(true);
@@ -543,13 +509,18 @@ const RecordAndPlay: React.FC<RecordAndPlayProps> = ({ project, user, onUpdatePr
   const [useProxyMode, setUseProxyMode] = useState<boolean>(true);
 
   // Universal Web Recording: Permissions & Diagnostics States
+  const [pendingPermissionRequest, setPendingPermissionRequest] = useState<BrowserPermissionRequest | null>(null);
   const [activeDiagnostics, setActiveDiagnostics] = useState<LaunchDiagnostic[]>([]);
   const [activeDiagnosticModal, setActiveDiagnosticModal] = useState<LaunchDiagnostic | null>(null);
   const [urlValidationState, setUrlValidationState] = useState<{ loading: boolean; valid?: boolean; error?: string; diagnostic?: LaunchDiagnostic; mode?: string } | null>(null);
+  const [isGrantingPermission, setIsGrantingPermission] = useState<boolean>(false);
 
   // Recorded Flow Video Viewer States
   const [isRecordedVideoModalOpen, setIsRecordedVideoModalOpen] = useState<boolean>(false);
   const [videoModalFlow, setVideoModalFlow] = useState<RecordedFlow | null>(null);
+
+  // Optional Video Upload Walkthrough State (accepts up to 1GB)
+  const [isVideoUploadModalOpen, setIsVideoUploadModalOpen] = useState<boolean>(false);
 
   const handleOpenRecordedVideo = (flowToView?: RecordedFlow) => {
     if (flowToView) {
@@ -625,23 +596,8 @@ const RecordAndPlay: React.FC<RecordAndPlayProps> = ({ project, user, onUpdatePr
     return str.includes('pass') || str.includes('secret') || str.includes('token');
   };
 
-  const isAuthenticationPlaybackUrl = (candidate?: string): boolean => {
-    if (!candidate) return false;
-    try {
-      return /\/(?:login|log-in|signin|sign-in|auth)(?:\/|$)/i.test(new URL(candidate, targetUrl).pathname);
-    } catch (e) {
-      return false;
-    }
-  };
-
-  const getRecordedStepScreenshot = (flow: RecordedFlow, step: RecordedStep, index: number): string | undefined =>
-    step.screenshot || flow.stepScreenshots?.[step.id] || flow.screenshots?.[index] ||
-    flow.steps.find(candidate => candidate.screen && candidate.screen === step.screen && candidate.screenshot)?.screenshot;
-
   const playbackCancelRef = useRef<boolean>(false);
   const playbackPauseRef = useRef<boolean>(false);
-  const stepByStepModeRef = useRef<boolean>(false);
-  const playbackRunningRef = useRef<boolean>(false);
 
   const resolveTargetUrlForInteraction = (step: RecordedStep, currentUrl: string, nextStep?: RecordedStep): string => {
     let baseUrl = currentUrl || targetUrl;
@@ -711,61 +667,13 @@ const RecordAndPlay: React.FC<RecordAndPlayProps> = ({ project, user, onUpdatePr
     return metrics.coordinates;
   };
 
-  /**
-   * Playback is a presentation of user actions, not a browser event dump.
-   * Navigation, submit and hover events are emitted automatically by the page
-   * around a click. Fold their resulting URL/screenshot into the preceding user
-   * action instead of displaying them as invented intermediate steps.
-   */
-  const buildPerformedStepsFlow = (sourceFlow: RecordedFlow): RecordedFlow => {
-    const performedSteps: RecordedStep[] = [];
-    const recordedInitialUrl = sourceFlow.initialUrl || sourceFlow.steps.find(step => step.action === 'navigate')?.value || sourceFlow.steps[0]?.url;
-
-    sourceFlow.steps.forEach((rawStep, sourceIndex) => {
-      const step = { ...rawStep };
-      const action = String(step.action || '').toLowerCase();
-      const isBrowserGenerated = ['navigate', 'submit', 'hover', 'focus'].includes(action);
-
-      if (isBrowserGenerated) {
-        const previous = performedSteps[performedSteps.length - 1];
-        if (previous) {
-          const evidence = step.screenshot || sourceFlow.stepScreenshots?.[step.id] || sourceFlow.screenshots?.[sourceIndex];
-          if (evidence) previous.screenshot = evidence;
-          if (action === 'navigate') {
-            const destination = step.value || step.url;
-            if (destination) previous.url = destination;
-          }
-        }
-        return;
-      }
-
-      performedSteps.push(step);
-    });
-
-    return {
-      ...sourceFlow,
-      initialUrl: recordedInitialUrl,
-      steps: performedSteps,
-      stepScreenshots: performedSteps.reduce<Record<string, string>>((screenshots, step) => {
-        const evidence = step.screenshot || sourceFlow.stepScreenshots?.[step.id];
-        if (evidence) screenshots[step.id] = evidence;
-        return screenshots;
-      }, {})
-    };
-  };
-
   const handleStartPlayback = (flowToPlay: RecordedFlow) => {
     if (!flowToPlay || !flowToPlay.steps || flowToPlay.steps.length === 0) {
       toast.error('Flow has no recorded steps to play back');
       return;
     }
-    const performedFlow = flowToPlay.platform === 'web' ? buildPerformedStepsFlow(flowToPlay) : flowToPlay;
-    if (performedFlow.steps.length === 0) {
-      toast.error('Flow has no user-performed steps to play back');
-      return;
-    }
-    setPendingPlaybackFlow(performedFlow);
-    if (performedFlow.platform === 'mobile') {
+    setPendingPlaybackFlow(flowToPlay);
+    if (flowToPlay.platform === 'mobile') {
       setPlaybackSelectedBrowser('mobile_chrome');
       setPlaybackViewport('412x915');
     } else {
@@ -796,10 +704,6 @@ const RecordAndPlay: React.FC<RecordAndPlayProps> = ({ project, user, onUpdatePr
     setIsPlaybackModalOpen(true);
     setPlaybackStatus('running');
     setPlaybackActiveUrl(initialUrl);
-    // Each run decides afresh whether it shows a video, so a previous flow's
-    // recording is never left on screen.
-    setActiveVideoUrl(null);
-    setPlaybackUsesVideo(true);
 
     // Preload Step 0 Metadata & Alignment instantly
     const firstStep = activeFlow.steps[0];
@@ -839,12 +743,11 @@ const RecordAndPlay: React.FC<RecordAndPlayProps> = ({ project, user, onUpdatePr
     setStepExecutionStatus(initialStatuses);
     setStepExecutionTime({});
 
-    const recordedScreenshots: Record<string, string> = { ...(activeFlow.stepScreenshots || {}) };
-    activeFlow.steps.forEach((step, index) => {
-      const screenshot = step.screenshot || activeFlow.screenshots?.[index];
-      if (screenshot) recordedScreenshots[step.id] = screenshot;
-    });
-    setPlaybackStepScreenshots(recordedScreenshots);
+    if (firstStep.screenshot) {
+      setPlaybackStepScreenshots({ [firstStep.id]: firstStep.screenshot });
+    } else {
+      setPlaybackStepScreenshots({});
+    }
 
     setPlaybackLogs([
       {
@@ -884,42 +787,9 @@ const RecordAndPlay: React.FC<RecordAndPlayProps> = ({ project, user, onUpdatePr
       return;
     }
 
-    // Guard against the delayed auto-start and a user click launching two
-    // playback requests for the same flow at the same time.
-    if (playbackRunningRef.current) return;
-    playbackRunningRef.current = true;
-
     playbackCancelRef.current = false;
     playbackPauseRef.current = false;
     setPlaybackStatus('running');
-
-    // Video playback: show what the recording actually did, instead of driving a
-    // fresh browser through the steps again. Nothing is executed against the
-    // site, so nothing can fail on a changed locator - and equally, nothing is
-    // verified. The automation engine stays available via the toggle.
-    const flowVideo = targetFlow.videoUrl || recordedVideoUrl;
-    if (playbackUsesVideo && flowVideo) {
-      setActiveVideoUrl(flowVideo);
-      setPlaybackStatus('completed');
-      setCurrentPlaybackStepIndex(targetFlow.steps.length);
-      setPlaybackLogs(prev => [...prev, {
-        timestamp: new Date().toLocaleTimeString(),
-        level: 'info',
-        message: `🎬 Playing the recorded session video (${targetFlow.steps.length} recorded steps). No actions are being executed against the site.`
-      }]);
-      // Watching a video is not an active engine run. Release the guard so the
-      // user can switch to "Run Automation Instead" and press Play.
-      playbackRunningRef.current = false;
-      return;
-    }
-
-    if (playbackUsesVideo && !flowVideo) {
-      setPlaybackLogs(prev => [...prev, {
-        timestamp: new Date().toLocaleTimeString(),
-        level: 'warn',
-        message: '⚠️ This flow has no session video (it was recorded before video capture, or not in Codegen mode). Running the automation engine instead.'
-      }]);
-    }
 
     const steps = targetFlow.steps;
     const chosenBrowserObj = PLAYBACK_BROWSER_OPTIONS.find(b => b.id === playbackSelectedBrowser) || PLAYBACK_BROWSER_OPTIONS[0];
@@ -974,12 +844,11 @@ const RecordAndPlay: React.FC<RecordAndPlayProps> = ({ project, user, onUpdatePr
     setStepExecutionStatus(initialStatuses);
     setStepExecutionTime({});
 
-    const recordedScreenshots: Record<string, string> = { ...(targetFlow.stepScreenshots || {}) };
-    steps.forEach((step, index) => {
-      const screenshot = step.screenshot || targetFlow.screenshots?.[index];
-      if (screenshot) recordedScreenshots[step.id] = screenshot;
-    });
-    setPlaybackStepScreenshots(recordedScreenshots);
+    if (firstStep.screenshot) {
+      setPlaybackStepScreenshots({ [firstStep.id]: firstStep.screenshot });
+    } else {
+      setPlaybackStepScreenshots({});
+    }
     setCompletedInputEntries([]);
 
     setPlaybackLogs(prev => [...prev, 
@@ -995,72 +864,12 @@ const RecordAndPlay: React.FC<RecordAndPlayProps> = ({ project, user, onUpdatePr
       }
     ]);
 
-    // Native mobile recordings contain package names and Appium/ADB locators, not
-    // browser URLs. Replay their captured frames (or the interactive emulator when
-    // a frame is unavailable) instead of sending them through Playwright.
-    if (targetFlow.platform === 'mobile') {
-      setIsPreparingPlayback(false);
-      setPlaybackLogs(prev => [...prev, {
-        timestamp: new Date().toLocaleTimeString(),
-        level: 'info',
-        message: `📱 Starting native mobile playback on ${mobileDevice || 'Android device'}...`
-      }]);
-
-      for (let index = 0; index < steps.length; index++) {
-        if (playbackCancelRef.current) {
-          setPlaybackStatus('idle');
-          return;
-        }
-        while (playbackPauseRef.current) {
-          await new Promise(resolve => setTimeout(resolve, 100));
-          if (playbackCancelRef.current) return;
-        }
-
-        const step = steps[index];
-        const startedAt = Date.now();
-        setCurrentPlaybackStepIndex(index);
-        setStepExecutionStatus(prev => ({ ...prev, [step.id]: step.skipped ? 'skipped' : 'running' }));
-
-        const metrics = resolveStepTargetMetrics(step, index, steps.length, 'mobile');
-        setPrevCursorPos(cursorPos);
-        setCursorPos(metrics.coordinates);
-        setCurrentTargetBox(metrics.targetBox);
-        setActiveTypingText(['fill', 'type'].includes(step.action) ? String(step.value || '') : '');
-
-        if (!step.skipped && ['click', 'dblclick', 'tap'].includes(step.action)) {
-          setIsClicking(true);
-          await new Promise(resolve => setTimeout(resolve, Math.max(45, Math.round(180 / playbackSpeed))));
-          setIsClicking(false);
-        }
-        await new Promise(resolve => setTimeout(resolve, Math.max(90, Math.round(500 / playbackSpeed))));
-
-        setStepExecutionStatus(prev => ({ ...prev, [step.id]: step.skipped ? 'skipped' : 'passed' }));
-        setStepExecutionTime(prev => ({ ...prev, [step.id]: Date.now() - startedAt }));
-        setPlaybackLogs(prev => [...prev, {
-          timestamp: new Date().toLocaleTimeString(),
-          level: step.skipped ? 'warn' : 'success',
-          message: `${step.skipped ? '⏭️' : '✅'} Mobile step ${index + 1}/${steps.length}: ${step.action.toUpperCase()} ${step.elementName || step.locator?.primary?.value || ''}`
-        }]);
-      }
-
-      setActiveTypingText('');
-      setPlaybackStatus('completed');
-      playbackRunningRef.current = false;
-      setPlaybackLogs(prev => [...prev, {
-        timestamp: new Date().toLocaleTimeString(),
-        level: 'success',
-        message: `🎉 Native mobile playback completed (${steps.length} steps).`
-      }]);
-      return;
-    }
-
     // 2. Lightweight loading indicator timer (displays if browser launch/page readiness takes > 1000ms)
     const prepTimer = setTimeout(() => {
       setIsPreparingPlayback(true);
     }, 1000);
 
     let hasFailed = false;
-    const failedStepNumbers: number[] = [];
 
     // Queue data structures for background SSE stream reader and foreground step runner
     const stepQueue: any[] = [];
@@ -1102,8 +911,7 @@ const RecordAndPlay: React.FC<RecordAndPlayProps> = ({ project, user, onUpdatePr
           githubConfig: project?.githubConfig,
           slackConfig: project?.slackConfig,
           appUrl: project?.appUrl || targetUrl,
-          syntheticUsers: project?.syntheticUsers,
-          webStorageState: targetFlow.platform === 'web' ? targetFlow.webStorageState : undefined
+          syntheticUsers: project?.syntheticUsers
         })
       });
       if (!res.ok) {
@@ -1176,7 +984,6 @@ const RecordAndPlay: React.FC<RecordAndPlayProps> = ({ project, user, onUpdatePr
           clearTimeout(prepTimer);
           setIsPreparingPlayback(false);
           setPlaybackStatus('idle');
-          playbackRunningRef.current = false;
           setPlaybackLogs(prev => [...prev, {
             timestamp: new Date().toLocaleTimeString(),
             level: 'warn',
@@ -1195,25 +1002,6 @@ const RecordAndPlay: React.FC<RecordAndPlayProps> = ({ project, user, onUpdatePr
 
         processedCount++;
         const step = steps[resItem.stepIndex] || steps[processedCount - 1];
-
-        // The target can expire its authenticated session between recording and
-        // playback. In that case the browser returns a login screenshot for a
-        // dashboard step. Prefer the actual captured evidence and keep the
-        // performed-step viewer moving instead of freezing on the redirect.
-        const expectedStepUrl = step.action === 'navigate' ? (step.value || step.url) : step.url;
-        const recordedEvidence = getRecordedStepScreenshot(targetFlow, step, resItem.stepIndex);
-        const redirectedBackToLogin = Boolean(
-          expectedStepUrl &&
-          !isAuthenticationPlaybackUrl(expectedStepUrl) &&
-          isAuthenticationPlaybackUrl(resItem.resultingUrl)
-        );
-        if (redirectedBackToLogin && recordedEvidence) {
-          resItem.visualFallback = true;
-          resItem.status = 'passed';
-          resItem.error = 'Live login session expired; showing recorded performed-step evidence.';
-          resItem.screenshot = recordedEvidence;
-          resItem.resultingUrl = sanitizeClientUrl(expectedStepUrl, currentLiveUrl) || expectedStepUrl;
-        }
 
         setCurrentPlaybackStepIndex(resItem.stepIndex);
         setStepExecutionStatus(prev => ({ ...prev, [resItem.stepId]: 'running' }));
@@ -1317,17 +1105,13 @@ const RecordAndPlay: React.FC<RecordAndPlayProps> = ({ project, user, onUpdatePr
         }]);
 
         if (resItem.status === 'failed') {
-          // The engine decides whether a failure ends the run: it continues when
-          // the browser is still on the page the next step expects, so one run
-          // reports every broken step instead of only the first. Keep consuming
-          // results until the stream ends rather than stopping here.
           hasFailed = true;
-          failedStepNumbers.push(resItem.stepIndex + 1);
           setPlaybackStatus('failed');
-          toast.error(`Step ${resItem.stepIndex + 1} failed: ${resItem.error || 'Step execution failed'}`);
+          toast.error(`Playback failed at step ${resItem.stepIndex + 1}: ${resItem.error || 'Step execution failed'}`);
+          break;
         }
 
-        if (stepByStepModeRef.current && processedCount < steps.length) {
+        if (isStepByStepMode && processedCount < steps.length) {
           playbackPauseRef.current = true;
           setPlaybackStatus('paused');
           setPlaybackLogs(prev => [...prev, {
@@ -1340,31 +1124,6 @@ const RecordAndPlay: React.FC<RecordAndPlayProps> = ({ project, user, onUpdatePr
         }
       }
 
-      // A live browser stops streaming after its first failed protected-page
-      // interaction. Continue the remainder from recording evidence so Replay
-      // Flow always shows the complete sequence the user performed.
-      if (processedCount < steps.length && !playbackCancelRef.current) {
-        for (let index = processedCount; index < steps.length; index++) {
-          const step = steps[index];
-          const evidence = getRecordedStepScreenshot(targetFlow, step, index);
-          if (!evidence) continue;
-          setCurrentPlaybackStepIndex(index);
-          setPlaybackStepScreenshots(prev => ({ ...prev, [step.id]: evidence }));
-          setStepExecutionStatus(prev => ({ ...prev, [step.id]: 'passed' }));
-          setStepExecutionTime(prev => ({ ...prev, [step.id]: 0 }));
-          const recordedUrl = step.action === 'navigate' ? (step.value || step.url) : step.url;
-          if (recordedUrl) setPlaybackActiveUrl(sanitizeClientUrl(recordedUrl, currentLiveUrl) || recordedUrl);
-          setPlaybackLogs(prev => [...prev, {
-            timestamp: new Date().toLocaleTimeString(),
-            level: 'warn',
-            message: `⚠️ Step ${index + 1}/${steps.length}: showing recorded performed-step evidence because the live authenticated session ended.`
-          }]);
-          await new Promise(resolve => setTimeout(resolve, Math.max(120, Math.round(650 / playbackSpeed))));
-        }
-        hasFailed = false;
-        processedCount = steps.length;
-      }
-
       if (!hasFailed && !playbackCancelRef.current && processedCount > 0) {
         setPlaybackStatus('completed');
         setCurrentPlaybackStepIndex(steps.length);
@@ -1374,18 +1133,14 @@ const RecordAndPlay: React.FC<RecordAndPlayProps> = ({ project, user, onUpdatePr
           message: `🎉 Playback completed successfully! All ${steps.length} steps passed.`
         }]);
         toast.success(`Playback completed for "${targetFlow.name || 'Flow'}"`);
-        playbackRunningRef.current = false;
         return;
       }
       if (!playbackCancelRef.current) {
         setPlaybackStatus('failed');
-        const summary = failedStepNumbers.length > 0
-          ? `Playback finished with ${failedStepNumbers.length} failed step${failedStepNumbers.length === 1 ? '' : 's'} (step ${failedStepNumbers.join(', ')}) out of ${processedCount} executed.`
-          : 'Playback engine ended without verified step results; no simulated fallback was run.';
         setPlaybackLogs(prev => [...prev, {
           timestamp: new Date().toLocaleTimeString(),
           level: 'error',
-          message: summary
+          message: 'Playback engine ended without verified step results; no simulated fallback was run.'
         }]);
         toast.error('Playback ended without verified step results.');
         return;
@@ -1401,7 +1156,6 @@ const RecordAndPlay: React.FC<RecordAndPlayProps> = ({ project, user, onUpdatePr
         message: `Playback engine failed before completion: ${err?.message || String(err)}`
       }]);
       toast.error(`Playback failed: ${err?.message || 'playback engine unavailable'}`);
-      playbackRunningRef.current = false;
       return;
     }
 
@@ -1499,7 +1253,6 @@ const RecordAndPlay: React.FC<RecordAndPlayProps> = ({ project, user, onUpdatePr
       setCurrentPlaybackStepIndex(steps.length);
       toast.success(`Playback completed for "${targetFlow.name || 'Flow'}"`);
     }
-    playbackRunningRef.current = false;
   };
 
   const handlePausePlayback = () => {
@@ -1515,9 +1268,6 @@ const RecordAndPlay: React.FC<RecordAndPlayProps> = ({ project, user, onUpdatePr
   const handleStopPlayback = () => {
     playbackCancelRef.current = true;
     playbackPauseRef.current = false;
-    playbackRunningRef.current = false;
-    stepByStepModeRef.current = false;
-    setIsStepByStepMode(false);
     setIsPreparingPlayback(false);
     setPlaybackStatus('idle');
     setCurrentPlaybackStepIndex(-1);
@@ -1542,11 +1292,9 @@ const RecordAndPlay: React.FC<RecordAndPlayProps> = ({ project, user, onUpdatePr
 
     if (playbackStatus === 'paused') {
       playbackPauseRef.current = false;
-      stepByStepModeRef.current = true;
       setIsStepByStepMode(true);
       setPlaybackStatus('running');
     } else if (playbackStatus === 'idle') {
-      stepByStepModeRef.current = true;
       setIsStepByStepMode(true);
       handleRunPlayback();
     }
@@ -1560,7 +1308,7 @@ const RecordAndPlay: React.FC<RecordAndPlayProps> = ({ project, user, onUpdatePr
         body: JSON.stringify({
           email: user?.email || 'sowbarnya@qaoncloud.com',
           action,
-          params: { ...params, deviceId: mobileDevice }
+          params
         })
       });
     } catch (e) {
@@ -1596,9 +1344,6 @@ const RecordAndPlay: React.FC<RecordAndPlayProps> = ({ project, user, onUpdatePr
     extraMetrics?: {
       targetBox?: { x: number; y: number; width: number; height: number };
       coordinates?: { x: number; y: number };
-      // Set when re-recording an existing step with its resolved UI node, so the
-      // gesture is not dispatched to the device again
-      recordOnly?: boolean;
     }
   ) => {
     if (!elem) return;
@@ -1632,11 +1377,8 @@ const RecordAndPlay: React.FC<RecordAndPlayProps> = ({ project, user, onUpdatePr
 
     const valueToRecord = overrideValue !== undefined ? overrideValue : (actionToRecord === 'fill' ? (mobileInspectorInputValue || elem.text || 'Test Input Value') : (actionToRecord === 'assertion' ? (elem.text || elem.name) : (elem.text || elem.name || '')));
 
-    let primaryType: 'accessibility-id' | 'resource-id' | 'content-desc' | 'text' | 'xpath' | 'coordinates' = 'resource-id';
+    let primaryType: 'accessibility-id' | 'resource-id' | 'content-desc' | 'text' | 'xpath' | 'bounds' = 'resource-id';
     let primaryValue = elem.resourceId || elem.accessibilityId || elem.text || elem.xpath || '';
-    const coordinateValue = extraMetrics?.coordinates
-      ? JSON.stringify({ ...extraMetrics.coordinates, unit: 'percent' })
-      : '';
 
     if (elem.resourceId) {
       primaryType = 'resource-id';
@@ -1653,9 +1395,6 @@ const RecordAndPlay: React.FC<RecordAndPlayProps> = ({ project, user, onUpdatePr
     } else if (elem.xpath) {
       primaryType = 'xpath';
       primaryValue = elem.xpath;
-    } else if (coordinateValue) {
-      primaryType = 'coordinates';
-      primaryValue = coordinateValue;
     } else {
       primaryType = 'xpath';
       primaryValue = `//*[contains(@text, '${elem.name || 'element'}')]`;
@@ -1663,10 +1402,7 @@ const RecordAndPlay: React.FC<RecordAndPlayProps> = ({ project, user, onUpdatePr
 
     let playwrightCode = '';
     if (actionToRecord === 'click') {
-      if (primaryType === 'coordinates' && extraMetrics?.coordinates) {
-        const { x, y } = extraMetrics.coordinates;
-        playwrightCode = `// Tap ${elem.name || 'screen position'} (relative fallback)\nconst size = await driver.getWindowSize();\nawait driver.touchPerform([{ action: 'tap', options: { x: Math.round(size.width * ${x} / 100), y: Math.round(size.height * ${y} / 100) } }]);`;
-      } else if (primaryType === 'resource-id') {
+      if (primaryType === 'resource-id') {
         playwrightCode = `// Tap ${elem.name || primaryValue}\nawait driver.elementById("${primaryValue}").click();`;
       } else if (primaryType === 'accessibility-id') {
         playwrightCode = `// Tap ${elem.name || primaryValue}\nawait driver.elementByAccessibilityId("${primaryValue}").click();`;
@@ -1689,7 +1425,7 @@ const RecordAndPlay: React.FC<RecordAndPlayProps> = ({ project, user, onUpdatePr
       playwrightCode = `// Press key\nawait driver.pressKeyCode(${valueToRecord === 'Back' ? 4 : valueToRecord === 'Home' ? 3 : 187});`;
     }
 
-    const elemName = (elem.name && !/^coordinate-/i.test(elem.name) ? elem.name : '') || elem.text || 'Screen position';
+    const elemName = elem.name || elem.text || primaryValue || 'Mobile Element';
     const payload: any = {
       action: actionToRecord,
       value: valueToRecord,
@@ -1706,14 +1442,12 @@ const RecordAndPlay: React.FC<RecordAndPlayProps> = ({ project, user, onUpdatePr
           elem.accessibilityId ? { type: 'accessibility-id', value: elem.accessibilityId } : null,
           elem.contentDescription ? { type: 'content-desc', value: elem.contentDescription } : null,
           elem.text ? { type: 'text', value: elem.text } : null,
-          elem.xpath ? { type: 'xpath', value: elem.xpath } : null,
-          coordinateValue && primaryType !== 'coordinates' ? { type: 'coordinates', value: coordinateValue } : null
+          elem.xpath ? { type: 'xpath', value: elem.xpath } : null
         ].filter(Boolean)
       },
       screen: (mobileActiveAppTab || mobileAppScreen || 'MAIN').toUpperCase(),
       platform: 'mobile',
       bounds: elem.bounds,
-      resolvedFromHierarchy: !!extraMetrics?.recordOnly || undefined,
       targetBox: extraMetrics?.targetBox,
       coordinates: extraMetrics?.coordinates,
       x: extraMetrics?.coordinates?.x,
@@ -1732,12 +1466,10 @@ const RecordAndPlay: React.FC<RecordAndPlayProps> = ({ project, user, onUpdatePr
     
     // Also dispatch the physical action to the agent. The agent executes ADB
     // taps by coordinates, so never queue a locator-only tap with undefined x/y.
-    // A re-record that only upgrades an already-captured step to its real UI
-    // node must not gesture on the device a second time.
     const boundsMatch = elem.bounds?.match(/^\[(\d+),(\d+)\]\[(\d+),(\d+)\]$/);
     const tapX = boundsMatch ? Math.round((Number(boundsMatch[1]) + Number(boundsMatch[3])) / 2) : undefined;
     const tapY = boundsMatch ? Math.round((Number(boundsMatch[2]) + Number(boundsMatch[4])) / 2) : undefined;
-    if (!extraMetrics?.recordOnly && liveMobileFrame && tapX !== undefined && tapY !== undefined) {
+    if (liveMobileFrame && tapX !== undefined && tapY !== undefined) {
       performLiveDeviceAction('tap', {
         x: tapX,
         y: tapY,
@@ -1756,17 +1488,18 @@ const RecordAndPlay: React.FC<RecordAndPlayProps> = ({ project, user, onUpdatePr
       interval = setInterval(async () => {
         try {
           const userEmail = encodeURIComponent(user?.email || 'sowbarnya@qaoncloud.com');
-          // Keep a polling fallback active even while Socket.IO is connected.
-          // A connected socket can miss a frame during reconnect/session changes;
-          // comparing the data URL prevents redundant React frame swaps.
-          const res = await fetch(`/api/device-agent/live-frame?email=${userEmail}`);
-          if (res.ok && res.headers.get('content-type')?.includes('application/json')) {
-            const data = await res.json();
-            if (data.success && data.frame) {
-              setLiveMobileFrame(current => current === data.frame ? current : data.frame);
-              setMobileError(null);
-            } else if (data.error && typeof data.error === 'string' && data.error.includes("Appium")) {
-              setMobileError("Unable to start Appium. Verify Appium installation and Device Agent status.");
+          // Socket.IO is the primary live stream. Polling at the same time causes
+          // redundant frame swaps and visible flicker on Linux/Chromium.
+          if (!socketRef.current?.connected) {
+            const res = await fetch(`/api/device-agent/live-frame?email=${userEmail}`);
+            if (res.ok && res.headers.get('content-type')?.includes('application/json')) {
+              const data = await res.json();
+              if (data.success && data.frame) {
+                setLiveMobileFrame(current => current === data.frame ? current : data.frame);
+                setMobileError(null);
+              } else if (data.error && typeof data.error === 'string' && data.error.includes("Appium")) {
+                setMobileError("Unable to start Appium. Verify Appium installation and Device Agent status.");
+              }
             }
           }
 
@@ -1778,36 +1511,12 @@ const RecordAndPlay: React.FC<RecordAndPlayProps> = ({ project, user, onUpdatePr
               if (stepsData.success && Array.isArray(stepsData.steps) && stepsData.steps.length > 0) {
                 setCurrentSteps(prev => {
                   const existingIds = new Set(prev.map(s => s.id));
-                  const incoming = stepsData.steps
-                    .filter((s: any) => !existingIds.has(s.id))
-                    .map((step: any) => (
-                      step.screenshot || !recordedMobileFrameRef.current
-                        ? step
-                        : { ...step, screenshot: recordedMobileFrameRef.current }
-                    ));
-                  if (incoming.length === 0) return prev;
-
-                  // Steps polled from the device agent bypass addRecordedStep, so
-                  // apply the same repeat handling here. Without it a gesture the
-                  // inspector already captured is appended a second time, and the
-                  // agent's own retries pile up as identical steps.
-                  const merged = [...prev];
-                  let changed = false;
-                  for (const step of incoming) {
-                    const last = merged[merged.length - 1];
-                    if (isDuplicateOfRecordedStep(last, step)) {
-                      merged[merged.length - 1] = pickRicherRecordedStep(last, step) as RecordedStep;
-                      changed = true;
-                      continue;
-                    }
-                    merged.push(step);
-                    changed = true;
+                  const newSteps = stepsData.steps.filter((s: any) => !existingIds.has(s.id));
+                  if (newSteps.length > 0) {
+                    console.log(`[Mobile Sync] Polled and merged ${newSteps.length} physical emulator steps.`);
+                    return [...prev, ...newSteps];
                   }
-
-                  if (changed) {
-                    console.log(`[Mobile Sync] Polled ${incoming.length} agent steps, kept ${merged.length - prev.length} new.`);
-                  }
-                  return changed ? merged : prev;
+                  return prev;
                 });
               }
             }
@@ -2158,11 +1867,6 @@ const RecordAndPlay: React.FC<RecordAndPlayProps> = ({ project, user, onUpdatePr
     return null;
   });
   const socketRef = useRef<any>(null);
-  const userEmailRef = useRef((user?.email || 'sowbarnya@qaoncloud.com').toLowerCase());
-
-  useEffect(() => {
-    userEmailRef.current = (user?.email || 'sowbarnya@qaoncloud.com').toLowerCase();
-  }, [user?.email]);
   const isRecordingRef = useRef(false);
   const isPausedRef = useRef(false);
   const sessionIdRef = useRef<string | null>(null);
@@ -2288,47 +1992,6 @@ const RecordAndPlay: React.FC<RecordAndPlayProps> = ({ project, user, onUpdatePr
   };
 
   const addRecordedStep = (eventData: any) => {
-    // The device agent calls Android taps "tap" while the recorder UI uses
-    // "click". Normalize them so the later UIAutomator result can enrich the
-    // instant coordinate placeholder instead of creating a second step.
-    if (eventData?.action === 'tap') eventData.action = 'click';
-    if (eventData?.platform === 'mobile') {
-      const primaryValue = String(eventData.locator?.primary?.value || '');
-      const primaryCode = String(eventData.locator?.primary?.playwright || '');
-      const isBadNode = /@bounds\s*=/.test(`${primaryValue} ${primaryCode}`) ||
-        /android:id\/(?:navigationBarBackground|statusBarBackground|content)/i.test(`${primaryValue} ${primaryCode}`) ||
-        /android\.(?:widget\.ScrollView|view\\?\.View)(?:\[|$)/i.test(primaryValue);
-      if (isBadNode) {
-        let x = typeof eventData.x === 'number' ? eventData.x : eventData.coordinates?.x;
-        let y = typeof eventData.y === 'number' ? eventData.y : eventData.coordinates?.y;
-        const bounds = `${primaryValue} ${primaryCode} ${eventData.locator?.primary?.bounds || ''}`.match(/\[(\d+),(\d+)\]\[(\d+),(\d+)\]/);
-        if ((x === undefined || y === undefined) && bounds) {
-          x = (Number(bounds[1]) + Number(bounds[3])) / 2;
-          y = (Number(bounds[2]) + Number(bounds[4])) / 2;
-        }
-        if (x !== undefined && y !== undefined) {
-          const coordinateValue = JSON.stringify({ x, y, unit: 'pixels' });
-          eventData.coordinates = { x, y };
-          eventData.x = x;
-          eventData.y = y;
-          eventData.locator = {
-            primary: {
-              type: 'coordinates',
-              value: coordinateValue,
-              playwright: `await driver.touchPerform([{ action: 'tap', options: { x: ${Math.round(x)}, y: ${Math.round(y)} } }]);`
-            },
-            alternatives: (eventData.locator?.alternatives || []).filter((locator: any) =>
-              !/@bounds\s*=/.test(String(locator?.value || '')) &&
-              !/android:id\/(?:navigationBarBackground|statusBarBackground|content)/i.test(String(locator?.value || ''))
-            )
-          };
-        }
-        eventData.elementName = eventData.action === 'fill' || eventData.action === 'type' ? 'Text field' : 'Screen position';
-      }
-    }
-    if (eventData?.platform === 'mobile' && !eventData.screenshot && !eventData.image && recordedMobileFrameRef.current) {
-      eventData.screenshot = recordedMobileFrameRef.current;
-    }
     // Use refs for immediate access to current state
     const recording = isRecordingRef.current;
     const paused = isPausedRef.current;
@@ -2403,61 +2066,8 @@ const RecordAndPlay: React.FC<RecordAndPlayProps> = ({ project, user, onUpdatePr
       resolvedScreen = activeScreenRef.current;
     }
 
-    // Android often exposes the useful field semantics only after the first
-    // tap has focused it. When the following typing event identifies that
-    // field, enrich the earlier generic focus tap instead of leaving it as
-    // "Screen position". Its original coordinate locator remains untouched.
-    if (eventData.platform === 'mobile' &&
-        (eventData.action === 'fill' || eventData.action === 'type') &&
-        eventData.elementName &&
-        !/^(?:screen position|text field|input text:)/i.test(eventData.elementName)) {
-      setCurrentSteps(existing => {
-        let genericTapIndex = -1;
-        for (let index = existing.length - 1; index >= 0; index -= 1) {
-          const step = existing[index];
-          if (step.platform === 'mobile' &&
-              step.action === 'click' &&
-              /^(?:screen position|resolving android element…|tap at \(|element at \()/i.test(step.elementName || '') &&
-              Date.now() - (step.timestamp || 0) < 30000) {
-            genericTapIndex = index;
-            break;
-          }
-        }
-        if (genericTapIndex < 0) return existing;
-        return existing.map((step, index) => index === genericTapIndex
-          ? { ...step, elementName: eventData.elementName }
-          : step);
-      });
-    }
-
     setCurrentSteps(prev => {
       const lastStep = prev[prev.length - 1];
-
-      // Gestures are added immediately with a coordinate label. The desktop
-      // agent resolves the real Android node concurrently and sends it shortly
-      // afterwards; replace the placeholder while preserving its position/id.
-      const placeholderName = (name?: string) =>
-        /^(?:Tap|Element|Coordinates) at \(\d+,\s*\d+\)$/i.test(name || '') ||
-        name === 'Resolving Android element…' ||
-        name === 'Screen position';
-      const lastIsPlaceholder = lastStep?.platform === 'mobile' && placeholderName(lastStep.elementName);
-      const hasResolvedMobileNode = eventData.platform === 'mobile' &&
-        eventData.elementName &&
-        !placeholderName(eventData.elementName) &&
-        (lastStep?.action === eventData.action ||
-          (lastStep?.action === 'click' && eventData.action === 'tap'));
-      if (lastIsPlaceholder && hasResolvedMobileNode &&
-          Date.now() - (lastStep.timestamp || 0) < 10000) {
-        return [...prev.slice(0, -1), {
-          ...lastStep,
-          elementName: eventData.elementName,
-          locator: eventData.locator || lastStep.locator,
-          value: eventData.value ?? lastStep.value,
-          bounds: eventData.bounds || lastStep.bounds,
-          resolvedFromHierarchy: true,
-          screen: eventData.screen || lastStep.screen
-        }];
-      }
       
       // Avoid immediate identical navigate events to the same URL
       if (lastStep && lastStep.action === 'navigate' && eventData.action === 'navigate') {
@@ -2483,23 +2093,14 @@ const RecordAndPlay: React.FC<RecordAndPlayProps> = ({ project, user, onUpdatePr
         }
       }
 
-      // Every mobile gesture is reported twice - once by the inspector UI and
-      // again by the device agent. Drop the repeat for taps, swipes, long
-      // presses and key presses alike, keeping whichever copy resolved the
-      // better locator. Deliberate repeats fall outside the capture window and
-      // are still recorded.
-      const incomingForDedup = {
-        ...eventData,
-        locator: eventData.locator || (eventData.selector
-          ? { primary: { type: 'css', value: eventData.selector }, alternatives: [] }
-          : undefined),
-        timestamp: eventData.timestamp || Date.now()
-      };
-      if (isDuplicateOfRecordedStep(lastStep, incomingForDedup)) {
-        // Always write the kept step back: it carries the sliding duplicate
-        // window, without which a long burst of repeats starts recording again
-        // part-way through.
-        return [...prev.slice(0, -1), pickRicherRecordedStep(lastStep, incomingForDedup) as RecordedStep];
+      // Avoid duplicate clicks on the exact same element within 300ms
+      if (lastStep && lastStep.action === 'click' && eventData.action === 'click') {
+        const currentSelector = eventData.locator?.primary?.value || eventData.selector;
+        const lastSelector = lastStep.locator?.primary?.value;
+        
+        if (lastSelector && currentSelector && lastSelector === currentSelector && Date.now() - (lastStep.timestamp || 0) < 300) {
+          return prev;
+        }
       }
 
       // Generate Playwright code if missing
@@ -2555,12 +2156,9 @@ const RecordAndPlay: React.FC<RecordAndPlayProps> = ({ project, user, onUpdatePr
         x: eventData.x,
         y: eventData.y,
         scrollX: eventData.scrollX,
-        scrollY: eventData.scrollY,
-        bounds: eventData.bounds,
-        className: eventData.className,
-        resolvedFromHierarchy: eventData.resolvedFromHierarchy
+        scrollY: eventData.scrollY
       };
-
+      
       console.log("New step added to state:", step.action, "Screen:", step.screen);
       return [...prev, step];
     });
@@ -2773,6 +2371,14 @@ const RecordAndPlay: React.FC<RecordAndPlayProps> = ({ project, user, onUpdatePr
       addRecordedStep(payload);
     });
 
+    socket.on('PERMISSION_REQUIRED', (data: BrowserPermissionRequest) => {
+      console.log('Received PERMISSION_REQUIRED from socket:', data);
+      setPendingPermissionRequest(data);
+      toast.warning(`Browser Permission Requested: ${data.permissions.join(', ')}`, {
+        description: 'AutomatiQA confirmation required to grant sensitive permissions.'
+      });
+    });
+
     socket.on('DIAGNOSTIC_EVENT', (data: { sessionId: string; diagnostic: LaunchDiagnostic }) => {
       console.log('Received DIAGNOSTIC_EVENT from socket:', data);
       if (data?.diagnostic) {
@@ -2792,8 +2398,20 @@ const RecordAndPlay: React.FC<RecordAndPlayProps> = ({ project, user, onUpdatePr
       }
     });
 
+    socket.on('PERMISSION_GRANTED', (data: any) => {
+      console.log('Permission granted confirmed:', data);
+      setPendingPermissionRequest(null);
+      toast.success(`Granted permissions: ${(data.permissions || []).join(', ')}`);
+    });
+
+    socket.on('PERMISSION_DENIED', (data: any) => {
+      console.log('Permission denied confirmed:', data);
+      setPendingPermissionRequest(null);
+      toast.info('Permission request denied for this recording session.');
+    });
+
     socket.on('MOBILE_FRAME', (data: any) => {
-      const currentUserEmail = userEmailRef.current;
+      const currentUserEmail = (user?.email || 'sowbarnya@qaoncloud.com').toLowerCase();
       const frameEmail = String(data?.email || '').toLowerCase();
       // MOBILE_FRAME is broadcast server-wide; never let another user's agent
       // replace this recorder's device screen.
@@ -2859,6 +2477,56 @@ const RecordAndPlay: React.FC<RecordAndPlayProps> = ({ project, user, onUpdatePr
     return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
   };
 
+  const handleGrantPermission = async (perms?: string[]) => {
+    if (!pendingPermissionRequest) return;
+    setIsGrantingPermission(true);
+    const currentSession = sessionId || sessionIdRef.current || pendingPermissionRequest.sessionId;
+    const permsList = perms || pendingPermissionRequest.permissions;
+    try {
+      const res = await fetch('/api/grant-permission', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          sessionId: currentSession,
+          permissions: permsList,
+          origin: pendingPermissionRequest.origin
+        })
+      });
+      if (res.ok) {
+        toast.success(`Granted permissions: ${permsList.join(', ')} to browser`);
+      } else {
+        const err = await res.json().catch(() => ({}));
+        toast.error(err.error || 'Failed to grant permissions');
+      }
+    } catch (e: any) {
+      toast.error(`Error granting permission: ${e.message}`);
+    } finally {
+      setIsGrantingPermission(false);
+      setPendingPermissionRequest(null);
+    }
+  };
+
+  const handleDenyPermission = async () => {
+    if (!pendingPermissionRequest) return;
+    const currentSession = sessionId || sessionIdRef.current || pendingPermissionRequest.sessionId;
+    try {
+      await fetch('/api/deny-permission', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          sessionId: currentSession,
+          permissions: pendingPermissionRequest.permissions,
+          origin: pendingPermissionRequest.origin
+        })
+      }).catch(() => {});
+      toast.info('Permission request denied for this session.');
+    } catch (e) {
+      // Ignore
+    } finally {
+      setPendingPermissionRequest(null);
+    }
+  };
+
   const handleValidateUrl = async (urlToValidate: string) => {
     if (!urlToValidate || urlToValidate === 'https://' || urlToValidate === 'http://') {
       setUrlValidationState(null);
@@ -2902,9 +2570,6 @@ const RecordAndPlay: React.FC<RecordAndPlayProps> = ({ project, user, onUpdatePr
   };
 
   const handleStartRecording = () => {
-    if (platform === 'web') {
-      setRecordedWebStorageState(undefined);
-    }
     setIsStartModalOpen(true);
   };
 
@@ -3036,12 +2701,6 @@ const RecordAndPlay: React.FC<RecordAndPlayProps> = ({ project, user, onUpdatePr
       isPausedRef.current = false;
       setRecordingDuration(0);
       setShowLiveRecorder(true);
-
-      // Stopping a previous recording disconnects the shared socket. Reconnect
-      // it for every new mobile session so physical ADB taps can reach the UI.
-      if (socketRef.current && !socketRef.current.connected) {
-        socketRef.current.connect();
-      }
 
       // Step 5: Startup Logs
       const startupLogs: any[] = [];
@@ -3356,18 +3015,6 @@ const RecordAndPlay: React.FC<RecordAndPlayProps> = ({ project, user, onUpdatePr
         if (!response.ok) {
           console.error('Stop recording failed:', data.error);
         }
-        if (platform === 'web' && data.webStorageState) {
-          setRecordedWebStorageState(data.webStorageState);
-        }
-
-        // Playwright flushes the session video while the context is closing, so
-        // the stop response is the first point at which the URL is available.
-        if (data?.videoUrl) {
-          setRecordedVideoUrl(data.videoUrl);
-          toast.success('Session video captured - playback can replay it.');
-        } else {
-          setRecordedVideoUrl(null);
-        }
 
         if (socketRef.current) {
           socketRef.current.disconnect();
@@ -3677,12 +3324,7 @@ const RecordAndPlay: React.FC<RecordAndPlayProps> = ({ project, user, onUpdatePr
           setFlowName(response.suggestedTitle);
         }
         setActivePanel('steps');
-        const removed = currentPlatformSteps.length - updated.length;
-        toast.success(
-          removed > 0
-            ? `Optimized ${currentPlatformSteps.length} steps into ${updated.length} - removed ${removed} repeated step${removed === 1 ? '' : 's'}.`
-            : 'Script enhanced with AI successfully! No repeated steps found.'
-        );
+        toast.success('Script enhanced with AI successfully! All recorded steps preserved.');
       } else {
         toast.error('AI optimization returned invalid response. Please try again.');
       }
@@ -3797,35 +3439,41 @@ const RecordAndPlay: React.FC<RecordAndPlayProps> = ({ project, user, onUpdatePr
     return 'web';
   };
 
-  // Helper to determine folder type ('flow' vs 'script')
-  const getFolderType = (folder: { id: string; name: string; type?: string; platform?: 'web' | 'mobile' }): 'flow' | 'script' => {
+  // Helper to determine folder type ('flow' vs 'script') strictly without overlap
+  const getFolderType = (folder: { id: string; name: string; type?: string; platform?: 'web' | 'mobile'; isImported?: boolean }): 'flow' | 'script' => {
+    if (folder.type === 'script' || folder.type === 'script_generator') return 'script';
+    if (folder.type === 'flow') return 'flow';
+
+    const folderNameLower = (folder.name || '').toLowerCase();
+    if (folderNameLower.includes('script') || folderNameLower.includes('automation') || folderNameLower.includes('spec') || folderNameLower.includes('code')) {
+      return 'script';
+    }
+
     const folderFlows = (project.recordedFlows || []).filter(f => isItemInFolder(f.folderId, folder.id, project.automationFolders));
     const folderScripts = (project.automationScripts || []).filter(s => isItemInFolder(s.folderId, folder.id, project.automationFolders));
 
-    if (folderFlows.length > 0 && folderScripts.length === 0) return 'flow';
     if (folderScripts.length > 0 && folderFlows.length === 0) return 'script';
+    if (folderFlows.length > 0 && folderScripts.length === 0) return 'flow';
+    if (folderScripts.length > folderFlows.length) return 'script';
+    if (folderFlows.length > folderScripts.length) return 'flow';
 
-    if (folder.type === 'script') return 'script';
-    if (folder.type === 'flow') return 'flow';
-    if (folder.type === 'script_generator') return 'script';
+    if (folder.isImported) return 'script';
 
     return 'flow';
   };
 
   // Helper to isolate web vs mobile folders for flows
-  const isFlowFolderForPlatform = (folder: { id: string; name: string; type?: string; platform?: 'web' | 'mobile' }) => {
-    const fType = getFolderType(folder);
-    if (fType !== 'flow') return false;
+  const isFlowFolderForPlatform = (folder: { id: string; name: string; type?: string; platform?: 'web' | 'mobile'; isImported?: boolean }) => {
     const fPlatform = getFolderPlatform(folder);
-    return fPlatform === platform;
+    if (fPlatform !== platform) return false;
+    return getFolderType(folder) === 'flow';
   };
 
   // Helper to isolate web vs mobile folders for scripts
-  const isScriptFolderForPlatform = (folder: { id: string; name: string; type?: string; platform?: 'web' | 'mobile' }) => {
-    const fType = getFolderType(folder);
-    if (fType !== 'script') return false;
+  const isScriptFolderForPlatform = (folder: { id: string; name: string; type?: string; platform?: 'web' | 'mobile'; isImported?: boolean }) => {
     const fPlatform = getFolderPlatform(folder);
-    return fPlatform === platform;
+    if (fPlatform !== platform) return false;
+    return getFolderType(folder) === 'script';
   };
 
   const handleSwitchPlatform = (newPlatform: 'web' | 'mobile') => {
@@ -3854,7 +3502,7 @@ const RecordAndPlay: React.FC<RecordAndPlayProps> = ({ project, user, onUpdatePr
     if (activeFolderId && project.automationFolders?.some(f => (f.id === activeFolderId || f.name.toLowerCase() === activeFolderId.toLowerCase()) && isFlowFolderForPlatform(f))) {
       const matched = project.automationFolders.find(f => (f.id === activeFolderId || f.name.toLowerCase() === activeFolderId.toLowerCase()) && isFlowFolderForPlatform(f));
       if (matched) setSelectedFolder(matched.id);
-    } else if (selectedFolder && project.automationFolders?.some(f => f.id === selectedFolder && isFlowFolderForPlatform(f))) {
+    } else if (selectedFolder && project.automationFolders?.some(f => (f.id === selectedFolder || f.name.toLowerCase() === selectedFolder.toLowerCase()) && isFlowFolderForPlatform(f))) {
       // Keep existing
     } else {
       const firstFolder = project.automationFolders?.find(isFlowFolderForPlatform);
@@ -3888,6 +3536,10 @@ const RecordAndPlay: React.FC<RecordAndPlayProps> = ({ project, user, onUpdatePr
       updatedFolders = [...updatedFolders, { id: folderId, name: newFlowFolderName.trim(), type: 'flow', platform: platform }];
     }
 
+    const selectedFolderObj = updatedFolders.find(f => f.id === folderId || f.name.toLowerCase() === folderId?.toLowerCase());
+    const finalFolderId = selectedFolderObj?.id || folderId || undefined;
+    const finalFolderName = selectedFolderObj?.name || (isCreatingNewFlowFolder ? newFlowFolderName.trim() : undefined);
+
     const platformCurrentSteps = currentSteps.filter(s => (s.platform || 'web') === platform);
 
     const newFlow: RecordedFlow = {
@@ -3898,14 +3550,8 @@ const RecordAndPlay: React.FC<RecordAndPlayProps> = ({ project, user, onUpdatePr
       steps: platformCurrentSteps.length > 0 ? platformCurrentSteps : currentSteps,
       createdAt: new Date().toISOString(),
       isApproved,
-      folderId: folderId || undefined,
-      platform: platform,
-      ...(platform === 'web' && recordedWebStorageState
-        ? { webStorageState: recordedWebStorageState }
-        : {}),
-      // Keep an existing recording when editing metadata without recording a
-      // replacement session.
-      videoUrl: recordedVideoUrl || flows.find(f => f.id === activeFlowId)?.videoUrl
+      folderId: finalFolderId,
+      platform: platform
     };
 
     const currentFlowList = (project.recordedFlows && project.recordedFlows.length > 0) ? project.recordedFlows : flows;
@@ -3916,15 +3562,56 @@ const RecordAndPlay: React.FC<RecordAndPlayProps> = ({ project, user, onUpdatePr
     setFlows(updatedFlows);
     setActiveFlowId(newFlow.id);
 
+    // If a script has been generated during this session, ensure it is also saved to the selected folder
+    let updatedScripts = [...(project.automationScripts || [])];
+    const hasScriptContent = Boolean(generatedPlaywrightScript || (generatedProject?.files && generatedProject.files.length > 0));
+
+    if (hasScriptContent) {
+      const scriptTitle = (saveScriptTitle || `${flowName || 'Automation Script'} - ${selectedTool}`).trim();
+      const filesToSave = generatedProject?.files && generatedProject.files.length > 0
+        ? generatedProject.files
+        : [{ path: `tests/${(flowName || 'test').replace(/[^a-zA-Z0-9]/g, '_').toLowerCase()}.spec.ts`, content: generatedPlaywrightScript || '// Generated Automation Script' }];
+      const mainFile = filesToSave.find(f => f.path.includes('spec') || f.path.includes('test')) || filesToSave[0];
+
+      const existingScriptIndex = updatedScripts.findIndex(s =>
+        s.title.toLowerCase() === scriptTitle.toLowerCase() || (s.source === 'record_play' && s.title.toLowerCase().startsWith((flowName || '').toLowerCase()))
+      );
+
+      const scriptPayload: AutomationScript = {
+        id: existingScriptIndex >= 0 ? updatedScripts[existingScriptIndex].id : Math.random().toString(36).substr(2, 9),
+        title: scriptTitle,
+        description: saveScriptDescription || flowDescription || `Automation script generated from flow ${flowName}`,
+        content: mainFile?.content || generatedPlaywrightScript || '',
+        files: filesToSave,
+        tool: selectedTool,
+        language: selectedLanguage,
+        createdAt: new Date().toISOString(),
+        folderId: finalFolderId,
+        folderName: finalFolderName,
+        isApproved: true,
+        source: 'record_play',
+        platform: platform,
+        appPackage: platform === 'mobile' ? (mobilePackageName || mobileApkName || 'com.example.app') : undefined,
+        appUrl: platform === 'web' ? targetUrl : undefined
+      };
+
+      if (existingScriptIndex >= 0) {
+        updatedScripts[existingScriptIndex] = scriptPayload;
+      } else {
+        updatedScripts.push(scriptPayload);
+      }
+    }
+
     try {
       await onUpdateProject({
         ...project,
         recordedFlows: updatedFlows,
+        automationScripts: updatedScripts,
         automationFolders: updatedFolders
       });
-      toast.success(`${platform === 'web' ? 'Web' : 'Mobile'} flow saved successfully`);
+      toast.success(`${platform === 'web' ? 'Web' : 'Mobile'} flow ${hasScriptContent ? '& script ' : ''}saved successfully under "${finalFolderName || 'Root'}"`);
       setIsSaveFlowModalOpen(false);
-      setSelectedFolder(folderId || '');
+      setSelectedFolder(finalFolderId || '');
       setActivePanel('steps');
     } catch (error) {
       toast.error('Failed to save flow');
@@ -3932,28 +3619,48 @@ const RecordAndPlay: React.FC<RecordAndPlayProps> = ({ project, user, onUpdatePr
   };
 
   const handleSaveScript = () => {
-    if (!generatedProject || !flowName.trim()) {
-      toast.error('No script to save');
-      return;
+    const safeName = (flowName || 'automation_flow').replace(/[^a-zA-Z0-9]/g, '_').toLowerCase();
+    
+    // If generated project is not yet in state, synthesize it from generated script or recorded steps
+    if (!generatedProject) {
+      const fallbackFileContent = generatedPlaywrightScript || `// Automated script for ${flowName || 'Automation Flow'}\n// Target: ${targetUrl || 'https://app.example.com'}\n`;
+      setGeneratedProject({
+        files: [{
+          path: `tests/${safeName}.spec.ts`,
+          content: fallbackFileContent
+        }],
+        explanation: flowDescription || `Automation script generated from flow ${flowName}`
+      });
     }
-    setSaveScriptTitle(`${flowName} - ${selectedTool}`);
+
+    setSaveScriptTitle(`${flowName || 'Automation Script'} - ${selectedTool}`);
     setSaveScriptDescription(flowDescription || `Automation script generated from flow ${flowName}`);
-    setIsCreatingNewScriptFolder(false);
-    setNewScriptFolderName('');
     setSearchScriptFolderQuery('');
 
-    // Auto-select active folder if valid or first available script folder for this platform
-    if (activeFolderId && project.automationFolders?.some(f => (f.id === activeFolderId || f.name.toLowerCase() === activeFolderId.toLowerCase()) && isScriptFolderForPlatform(f))) {
-      const matched = project.automationFolders.find(f => (f.id === activeFolderId || f.name.toLowerCase() === activeFolderId.toLowerCase()) && isScriptFolderForPlatform(f));
-      if (matched) setSelectedFolder(matched.id);
-    } else if (selectedFolder && project.automationFolders?.some(f => f.id === selectedFolder && isScriptFolderForPlatform(f))) {
-      // Keep existing
+    // Filter available script folders for this platform
+    const availableFolders = (project.automationFolders || []).filter(isScriptFolderForPlatform);
+
+    if (availableFolders.length === 0) {
+      // If no folders exist yet, default to creating a new folder with a sensible name
+      setIsCreatingNewScriptFolder(true);
+      setNewScriptFolderName(platform === 'web' ? 'Web Automation Scripts' : 'Mobile Automation Scripts');
+      setSelectedFolder('');
     } else {
-      const firstFolder = project.automationFolders?.find(isScriptFolderForPlatform);
-      if (firstFolder) {
-        setSelectedFolder(firstFolder.id);
+      setIsCreatingNewScriptFolder(false);
+      setNewScriptFolderName('');
+      
+      // Auto-select active folder if valid or first available script folder for this platform
+      if (activeFolderId && availableFolders.some(f => f.id === activeFolderId || f.name.toLowerCase() === activeFolderId.toLowerCase())) {
+        const matched = availableFolders.find(f => f.id === activeFolderId || f.name.toLowerCase() === activeFolderId.toLowerCase());
+        if (matched) setSelectedFolder(matched.id);
+      } else if (selectedFolder && availableFolders.some(f => f.id === selectedFolder || f.name.toLowerCase() === selectedFolder.toLowerCase())) {
+        const matched = availableFolders.find(f => f.id === selectedFolder || f.name.toLowerCase() === selectedFolder.toLowerCase());
+        if (matched) setSelectedFolder(matched.id);
+      } else {
+        setSelectedFolder(availableFolders[0].id);
       }
     }
+    
     setIsSaveScriptModalOpen(true);
   };
 
@@ -3964,34 +3671,55 @@ const RecordAndPlay: React.FC<RecordAndPlayProps> = ({ project, user, onUpdatePr
     }
 
     let folderId = selectedFolder;
-    let updatedFolders = project.automationFolders || [];
+    let updatedFolders = [...(project.automationFolders || [])];
 
     if (isCreatingNewScriptFolder) {
-      if (!newScriptFolderName.trim()) {
-        toast.error('Please enter a folder name');
-        return;
+      const folderNameTrimmed = newScriptFolderName.trim() || (platform === 'web' ? 'Web Automation Scripts' : 'Mobile Automation Scripts');
+      const existingFolder = updatedFolders.find(f => (f.platform === platform || (!f.platform && platform === 'web')) && f.name.trim().toLowerCase() === folderNameTrimmed.toLowerCase());
+      if (existingFolder) {
+        folderId = existingFolder.id;
+      } else {
+        folderId = `folder-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`;
+        updatedFolders.push({ id: folderId, name: folderNameTrimmed, type: 'script', platform: platform });
       }
-      const isDuplicate = updatedFolders.some(f => f.type === 'script' && (f.platform === platform || (!f.platform && platform === 'web')) && f.name.trim().toLowerCase() === newScriptFolderName.trim().toLowerCase());
-      if (isDuplicate) {
-        toast.error(`A ${platform === 'web' ? 'web' : 'mobile'} script folder with this name already exists in this project`);
-        return;
+    } else if (!folderId) {
+      // If no folder was selected and not creating new, use first available folder or create a default one
+      const availableFolder = updatedFolders.find(isScriptFolderForPlatform);
+      if (availableFolder) {
+        folderId = availableFolder.id;
+      } else {
+        folderId = `folder-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`;
+        const defaultName = platform === 'web' ? 'Web Automation Scripts' : 'Mobile Automation Scripts';
+        updatedFolders.push({ id: folderId, name: defaultName, type: 'script', platform: platform });
       }
-      folderId = `folder-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`;
-      updatedFolders = [...updatedFolders, { id: folderId, name: newScriptFolderName.trim(), type: 'script', platform: platform }];
     }
 
-    const mainFile = generatedProject!.files.find(f => f.path.includes('spec') || f.path.includes('test')) || generatedProject!.files[0];
+    // Resolve folder metadata
+    const selectedFolderObj = updatedFolders.find(f => f.id === folderId || f.name.toLowerCase() === folderId?.toLowerCase());
+    const finalFolderId = selectedFolderObj?.id || folderId || undefined;
+    const finalFolderName = selectedFolderObj?.name || (isCreatingNewScriptFolder ? newScriptFolderName.trim() : undefined) || 'Root';
+
+    const filesToSave = generatedProject?.files && generatedProject.files.length > 0
+      ? generatedProject.files
+      : [{ path: `tests/${(flowName || 'test').replace(/[^a-zA-Z0-9]/g, '_').toLowerCase()}.spec.ts`, content: generatedPlaywrightScript || '// Generated Automation Script' }];
+
+    const mainFile = filesToSave.find(f => f.path.includes('spec') || f.path.includes('test')) || filesToSave[0];
+
+    const scriptTitle = saveScriptTitle.trim();
+    let updatedScripts = [...(project.automationScripts || [])];
+    const existingIndex = updatedScripts.findIndex(s => s.title.toLowerCase() === scriptTitle.toLowerCase());
 
     const newScript: AutomationScript = {
-      id: Math.random().toString(36).substr(2, 9),
-      title: saveScriptTitle,
-      description: saveScriptDescription,
-      content: mainFile?.content || '',
-      files: generatedProject!.files,
+      id: existingIndex >= 0 ? updatedScripts[existingIndex].id : Math.random().toString(36).substr(2, 9),
+      title: scriptTitle,
+      description: saveScriptDescription.trim() || `Automation script generated from flow ${flowName || 'Web Flow'}`,
+      content: mainFile?.content || generatedPlaywrightScript || '',
+      files: filesToSave,
       tool: selectedTool,
       language: selectedLanguage,
       createdAt: new Date().toISOString(),
-      folderId: folderId || undefined,
+      folderId: finalFolderId,
+      folderName: finalFolderName,
       isApproved: true,
       source: 'record_play',
       platform: platform,
@@ -3999,7 +3727,11 @@ const RecordAndPlay: React.FC<RecordAndPlayProps> = ({ project, user, onUpdatePr
       appUrl: platform === 'web' ? targetUrl : undefined
     };
 
-    const updatedScripts = [...(project.automationScripts || []), newScript];
+    if (existingIndex >= 0) {
+      updatedScripts[existingIndex] = newScript;
+    } else {
+      updatedScripts.push(newScript);
+    }
 
     try {
       await onUpdateProject({
@@ -4007,11 +3739,16 @@ const RecordAndPlay: React.FC<RecordAndPlayProps> = ({ project, user, onUpdatePr
         automationScripts: updatedScripts,
         automationFolders: updatedFolders
       });
-      toast.success(`${platform === 'web' ? 'Web' : 'Mobile'} script saved to repository`);
+      toast.success(`${platform === 'web' ? 'Web' : 'Mobile'} script saved to folder "${finalFolderName}"`);
       setIsSaveScriptModalOpen(false);
       setIsPreviewOpen(false);
+      setShowScriptPreview(false);
+      if (finalFolderId) {
+        setActiveFolderId(finalFolderId);
+        setActiveFolderType('script');
+      }
     } catch (error) {
-      toast.error('Failed to save project');
+      toast.error('Failed to save script to project');
     }
   };
 
@@ -4207,7 +3944,13 @@ const RecordAndPlay: React.FC<RecordAndPlayProps> = ({ project, user, onUpdatePr
 
     setIsGenerating(true);
     try {
-      const result = await generateAutomationScript(flow, selectedTool, selectedLanguage);
+      const result = await generateAutomationScript(
+        flow, 
+        selectedTool, 
+        selectedLanguage, 
+        selectedFramework, 
+        uploadedBddDoc || undefined
+      );
       setGeneratedProject(result);
       if (result.files.length > 0) {
         setSelectedFilePath(result.files[0].path);
@@ -4223,14 +3966,14 @@ const RecordAndPlay: React.FC<RecordAndPlayProps> = ({ project, user, onUpdatePr
         userStoryId: flow.name || 'REC-FLOW',
         feature: 'Automation - Record and play - Web app',
         inputModality: 'Multimodal',
-        inputModalityDetails: `${sanitizedSteps.length} Recorded Steps (Web Playwright/Selenium)`,
-        outputType: `${selectedTool} (${selectedLanguage}) POM Project Scripts`,
+        inputModalityDetails: `${sanitizedSteps.length} Recorded Steps (${selectedTool} ${selectedLanguage} ${selectedFramework})`,
+        outputType: `${selectedTool} (${selectedLanguage} - ${selectedFramework}) Project Scripts`,
         itemsGenerated: 1,
         creditsConsumed: 50,
         cached: false
       });
 
-      toast.success(`${selectedTool} (${selectedLanguage}) POM project generated!`);
+      toast.success(`${selectedTool} (${selectedLanguage}) ${selectedFramework} project generated!`);
     } catch (error) {
       toast.error('Failed to generate project');
     } finally {
@@ -4247,112 +3990,19 @@ const RecordAndPlay: React.FC<RecordAndPlayProps> = ({ project, user, onUpdatePr
         (step.value || "").toLowerCase().includes(query);
     });
 
-  // Android framework containers wrap every screen, so a script that targets one
-  // taps the root view instead of the control that was recorded.
-  const NON_TARGETABLE_ANDROID_IDS = new Set([
-    'android:id/content',
-    'android:id/decor_content_parent',
-    'android:id/action_bar_root',
-    'android:id/navigationBarBackground',
-    'android:id/statusBarBackground'
-  ]);
-
-  const isUsableMobileLocator = (locVal: string) =>
-    !!locVal &&
-    !NON_TARGETABLE_ANDROID_IDS.has(locVal) &&
-    !locVal.startsWith('android:id/') &&
-    locVal !== '//android.view.View';
-
   const formatStepToScript = (step: RecordedStep, targetPlatform: string = 'web') => {
     const isMobile = targetPlatform === 'mobile' || step.platform === 'mobile';
     const primary = step.locator?.primary;
     const pw = primary?.playwright?.trim();
 
-    // A step that never resolved to a real node must not be emitted as if it
-    // had: silently targeting the root container is worse than saying so.
-    if (isMobile && step.action !== 'navigate' && step.action !== 'wait' && step.action !== 'press' &&
-        !isUsableMobileLocator(primary?.value || '')) {
-      const where = step.coordinates || (typeof step.x === 'number' ? { x: step.x, y: step.y } : null);
-      return `  // TODO: "${step.elementName || step.action}" was recorded at screen coordinates only -\n` +
-        `  // no element was found in the app's UI hierarchy. Re-record this step.\n` +
-        (where ? `  await driver.touchPerform([{ action: 'tap', options: { x: ${where.x}, y: ${where.y} } }]);` :
-          `  // (no coordinates captured for this step)`);
-    }
-
-    const isBadMobileNode = isMobile && (
-      (/@bounds\s*=/.test(`${primary?.value || ''} ${pw || ''}`) &&
-        !/android\.(?:widget|view)\.(?:EditText|Button|CheckBox|RadioButton|Switch|Spinner)/i.test(`${primary?.value || ''} ${pw || ''}`)) ||
-      /android:id\/(?:navigationBarBackground|statusBarBackground|content)/i.test(primary?.value || '') ||
-      /android:id\/(?:navigationBarBackground|statusBarBackground|content)/i.test(pw || '') ||
-      /android\.(?:widget\.ScrollView|view\\?\.View)(?:\[|$)/i.test(primary?.value || '')
-    );
-
-    const coordinateScript = () => {
-      let point = step.coordinates || (step.x !== undefined && step.y !== undefined ? { x: step.x, y: step.y } : undefined);
-      // Older recordings may only have bounds embedded in the XPath. Recover
-      // the centre point so their generated scripts are repaired as well.
-      if (!point) {
-        const boundsSource = `${primary?.value || ''} ${pw || ''} ${(primary as any)?.bounds || ''}`;
-        const bounds = boundsSource.match(/\[(\d+),(\d+)\]\[(\d+),(\d+)\]/);
-        if (bounds) {
-          point = {
-            x: (Number(bounds[1]) + Number(bounds[3])) / 2,
-            y: (Number(bounds[2]) + Number(bounds[4])) / 2
-          };
-        }
-      }
-      if (!point) return '';
-      const isPercent = Boolean(step.targetBox) || primary?.type === 'coordinates' && /"unit":"percent"/.test(primary.value || '');
-      if (isPercent) {
-        return `  // Tap ${step.elementName || 'screen position'} (relative coordinates)\n  const size = await driver.getWindowSize();\n  await driver.touchPerform([{ action: 'tap', options: { x: Math.round(size.width * ${point.x} / 100), y: Math.round(size.height * ${point.y} / 100) } }]);`;
-      }
-      return `  // Tap ${step.elementName || 'screen position'}\n  await driver.touchPerform([{ action: 'tap', options: { x: ${Math.round(point.x)}, y: ${Math.round(point.y)} } }]);`;
-    };
-
-    // Repair old recordings too: broad bounds/root/system nodes are replaced
-    // at generation time, so users do not need to record the flow again.
-    if (isBadMobileNode && step.action === 'click') {
-      const fallback = coordinateScript();
-      if (fallback) return fallback;
-    }
-
-    if (isMobile && step.action === 'navigate') {
-      const appId = String(step.value || primary?.value || '').split('/')[0];
-      return appId
-        ? `  await driver.activateApp("${appId}");`
-        : '  // App navigation captured';
-    }
-
-    if (!isBadMobileNode && pw && (pw.startsWith('await ') || pw.startsWith('const ') || pw.startsWith('let ') || pw.startsWith('//') || pw.startsWith('expect(') || pw.includes('\nawait ') || pw.includes('\nconst '))) {
+    if (pw && (pw.startsWith('await ') || pw.startsWith('const ') || pw.startsWith('let ') || pw.startsWith('//') || pw.startsWith('expect(') || pw.includes('\nawait ') || pw.includes('\nconst '))) {
       return pw.split('\n').map(line => `  ${line}`).join('\n');
     }
 
     if (isMobile) {
       const locType = primary?.type || 'resource-id';
       const locVal = primary?.value || '';
-      const elExpr = locType === 'resource-id'
-        ? `driver.elementById("${locVal}")`
-        : locType === 'accessibility-id'
-          ? `driver.elementByAccessibilityId("${locVal}")`
-          : `driver.elementByXPath("${locVal}")`;
-      if (step.action === 'press') {
-        const key = step.value || 'Back';
-        return `  // Press ${key}\n  await driver.pressKeyCode(${key === 'Home' ? 3 : key === 'AppSwitch' || key === 'Recents' ? 187 : key === 'Enter' ? 66 : 4});`;
-      }
-      if (step.action === 'wait') {
-        return `  await driver.pause(${Number(step.value) || 1000});`;
-      }
-      if ((step.action as string) === 'swipe' || step.action === 'scroll') {
-        return `  // Swipe on ${step.elementName || locVal}\n  await driver.touchPerform([\n    { action: 'press', options: { x: ${step.x ?? 540}, y: ${step.y ?? 1200} } },\n    { action: 'wait', options: { ms: 300 } },\n    { action: 'moveTo', options: { x: ${step.deltaX ?? step.x ?? 540}, y: ${step.deltaY ?? 400} } },\n    { action: 'release' }\n  ]);`;
-      }
-      if ((step.action as string) === 'long_press') {
-        return `  // Long press ${step.elementName || locVal}\n  const el = await ${elExpr};\n  await driver.touchPerform([{ action: 'longPress', options: { element: el.value } }, { action: 'release' }]);`;
-      }
       if (step.action === 'click') {
-        if (locType === 'coordinates') {
-          const fallback = coordinateScript();
-          if (fallback) return fallback;
-        }
         if (locType === 'resource-id') return `  // Tap ${step.elementName || locVal}\n  await driver.elementById("${locVal}").click();`;
         if (locType === 'accessibility-id') return `  // Tap ${step.elementName || locVal}\n  await driver.elementByAccessibilityId("${locVal}").click();`;
         return `  // Tap ${step.elementName || locVal}\n  const el = await driver.elementByXPath("${locVal}");\n  await el.click();`;
@@ -4369,7 +4019,8 @@ const RecordAndPlay: React.FC<RecordAndPlayProps> = ({ project, user, onUpdatePr
 
     const locExpr = pw || (primary?.value ? `page.locator('${primary.value}')` : `page.locator('body')`);
     if (step.action === 'navigate') {
-      return `  await page.goto('${step.value || ''}');`;
+      const navUrl = step.value || step.url || targetUrl || 'https://app.example.com';
+      return `  await page.goto('${navUrl}');`;
     }
     if (step.action === 'click') {
       return `  await ${locExpr}.click();`;
@@ -4420,24 +4071,19 @@ const RecordAndPlay: React.FC<RecordAndPlayProps> = ({ project, user, onUpdatePr
     return `  // Action: ${step.action} on ${primary?.value || ''}`;
   };
 
-  // Generate from de-duplicated steps. Recordings can carry the same gesture more
-  // than once (the inspector and the device agent both report it), and emitting
-  // every copy produces a script that repeats each action.
-  const scriptSteps = useMemo(() => deduplicateRecordedSteps(currentSteps) as RecordedStep[], [currentSteps]);
-
-  const generatedPlaywrightScript = platform === 'mobile'
+  const generatedPlaywrightScript = platform === 'mobile' 
     ? `import { remote } from 'webdriverio';
 import { expect } from 'expect';
 
 describe('${flowName}', () => {
   it('should execute recorded mobile scenario', async () => {
-${scriptSteps.map(step => formatStepToScript(step, 'mobile')).join('\n')}
+${currentSteps.map(step => formatStepToScript(step, 'mobile')).join('\n')}
   });
 });`
     : `import { test, expect } from '@playwright/test';
 
 test('${flowName}', async ({ page }) => {
-${scriptSteps.map(step => formatStepToScript(step, 'web')).join('\n')}
+${currentSteps.map(step => formatStepToScript(step, 'web')).join('\n')}
 });`;
 
   const renderStartModalContent = () => {
@@ -5126,6 +4772,13 @@ ${scriptSteps.map(step => formatStepToScript(step, 'web')).join('\n')}
             </div>
 
             <button 
+              onClick={() => setIsVideoUploadModalOpen(true)}
+              className="flex items-center gap-2 px-5 py-3 bg-gradient-to-r from-cyan-600 to-blue-600 text-white rounded-2xl font-black text-xs uppercase tracking-widest hover:from-cyan-700 hover:to-blue-700 transition-all shadow-md shadow-cyan-500/20 cursor-pointer"
+              title="Upload walkthrough video (up to 1GB) to detect user actions, inspect live DOM, and generate automation scripts"
+            >
+              <Video size={16} /> Upload Video (1GB)
+            </button>
+            <button 
               onClick={() => {
                 setActiveFolderId(null);
                 setActiveFolderType(null);
@@ -5287,6 +4940,31 @@ ${scriptSteps.map(step => formatStepToScript(step, 'web')).join('\n')}
                         <FileCode size={20} />
                       </div>
                       <div className="flex items-center gap-2">
+                        {/* Approve Toggle Button */}
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            const updatedScripts = (project.automationScripts || []).map(s =>
+                              s.id === script.id ? { ...s, isApproved: !s.isApproved } : s
+                            );
+                            onUpdateProject({ ...project, automationScripts: updatedScripts });
+                            toast.success(
+                              script.isApproved
+                                ? 'Script removed from Execution Hub'
+                                : 'Script approved and added to Execution Hub!'
+                            );
+                          }}
+                          className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[9px] font-black uppercase tracking-widest transition-all cursor-pointer ${
+                            script.isApproved
+                              ? 'bg-emerald-100 hover:bg-emerald-200 text-emerald-800 border border-emerald-300'
+                              : 'bg-white hover:bg-emerald-50 text-slate-600 hover:text-emerald-700 border border-slate-200 shadow-2xs'
+                          }`}
+                          title={script.isApproved ? 'Approved - Click to remove from Execution Hub' : 'Approve for Execution Hub'}
+                        >
+                          <CheckCircle2 size={12} className={script.isApproved ? 'text-emerald-600' : 'text-slate-400'} />
+                          {script.isApproved ? 'Approved' : 'Approve'}
+                        </button>
                         <div className="px-2 py-1 bg-slate-900 text-white rounded-lg text-[8px] font-black uppercase tracking-widest">
                           {script.tool}
                         </div>
@@ -5391,18 +5069,30 @@ ${scriptSteps.map(step => formatStepToScript(step, 'web')).join('\n')}
             
             <div className="grid grid-cols-3 gap-4">
               {!isRecording ? (
-                <button 
-                  onClick={handleStartRecording}
-                  disabled={isStarting}
-                  className="col-span-3 flex flex-col items-center justify-center gap-3 p-8 bg-emerald-50 text-emerald-600 rounded-3xl border border-emerald-100 hover:bg-emerald-100 transition-all group disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  <div className={`p-4 bg-emerald-600 text-white rounded-2xl shadow-lg ${!isStarting ? 'group-hover:scale-110' : ''} transition-transform`}>
-                    {isStarting ? <RotateCcw size={24} className="animate-spin" /> : <Play size={24} fill="currentColor" />}
-                  </div>
-                  <span className="text-xs font-black uppercase tracking-widest">
-                    {isStarting ? 'Starting...' : 'Start Recording'}
-                  </span>
-                </button>
+                <div className="col-span-3 space-y-3">
+                  <button 
+                    onClick={handleStartRecording}
+                    disabled={isStarting}
+                    className="w-full flex flex-col items-center justify-center gap-3 p-8 bg-emerald-50 text-emerald-600 rounded-3xl border border-emerald-100 hover:bg-emerald-100 transition-all group disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    <div className={`p-4 bg-emerald-600 text-white rounded-2xl shadow-lg ${!isStarting ? 'group-hover:scale-110' : ''} transition-transform`}>
+                      {isStarting ? <RotateCcw size={24} className="animate-spin" /> : <Play size={24} fill="currentColor" />}
+                    </div>
+                    <span className="text-xs font-black uppercase tracking-widest">
+                      {isStarting ? 'Starting...' : 'Start Recording'}
+                    </span>
+                  </button>
+
+                  <button 
+                    type="button"
+                    onClick={() => setIsVideoUploadModalOpen(true)}
+                    className="w-full flex items-center justify-center gap-2 py-3 px-4 bg-slate-50 hover:bg-slate-100 border border-slate-200/80 rounded-2xl text-xs font-bold text-slate-700 hover:text-indigo-600 transition-all cursor-pointer"
+                    title="Upload recorded walkthrough video (up to 1GB) to auto-extract steps & DOM locators"
+                  >
+                    <Video size={14} className="text-cyan-600" />
+                    <span>Upload Video Flow (Up to 1GB)</span>
+                  </button>
+                </div>
               ) : (
                 <>
                   <button 
@@ -5506,15 +5196,27 @@ ${scriptSteps.map(step => formatStepToScript(step, 'web')).join('\n')}
 
           {/* Script Generation Config */}
           <div className="bg-white p-8 rounded-[2.5rem] border border-slate-100 shadow-sm space-y-6">
-            <h3 className="text-xs font-black uppercase tracking-[0.2em] text-slate-400">Generation Config</h3>
+            <div className="flex items-center justify-between">
+              <h3 className="text-xs font-black uppercase tracking-[0.2em] text-slate-400">Generation Config</h3>
+              <span className="text-[10px] font-black uppercase px-2 py-0.5 bg-indigo-50 text-indigo-700 rounded-md">
+                POM & BDD Ready
+              </span>
+            </div>
             
             <div className="grid grid-cols-2 gap-4">
               <div>
-                <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-2 mb-2 block">Framework</label>
+                <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-2 mb-2 block">Tool / Engine</label>
                 <div className="relative">
                   <select 
                     value={selectedTool || 'Playwright'}
-                    onChange={(e) => setSelectedTool(e.target.value as AutomationTool)}
+                    onChange={(e) => {
+                      const newTool = e.target.value as AutomationTool;
+                      setSelectedTool(newTool);
+                      const available = getFrameworksForAutomation(newTool, selectedLanguage);
+                      if (!available.includes(selectedFramework)) {
+                        setSelectedFramework(available[0] || 'Page Object Model (POM)');
+                      }
+                    }}
                     className="w-full pl-4 pr-10 py-3 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold outline-none appearance-none cursor-pointer"
                   >
                     <option value="Playwright">Playwright</option>
@@ -5530,7 +5232,14 @@ ${scriptSteps.map(step => formatStepToScript(step, 'web')).join('\n')}
                 <div className="relative">
                   <select 
                     value={selectedLanguage || 'TypeScript'}
-                    onChange={(e) => setSelectedLanguage(e.target.value as ProgrammingLanguage)}
+                    onChange={(e) => {
+                      const newLang = e.target.value as ProgrammingLanguage;
+                      setSelectedLanguage(newLang);
+                      const available = getFrameworksForAutomation(selectedTool, newLang);
+                      if (!available.includes(selectedFramework)) {
+                        setSelectedFramework(available[0] || 'Page Object Model (POM)');
+                      }
+                    }}
                     className="w-full pl-4 pr-10 py-3 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold outline-none appearance-none cursor-pointer"
                   >
                     <option value="TypeScript">TypeScript</option>
@@ -5541,6 +5250,129 @@ ${scriptSteps.map(step => formatStepToScript(step, 'web')).join('\n')}
                   <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" size={14} />
                 </div>
               </div>
+            </div>
+
+            {/* Framework Architecture Selector (TestNG, Cucumber/BDD, PyTest, JUnit, POM) */}
+            <div>
+              <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-2 mb-2 block">
+                Framework Architecture / Runner
+              </label>
+              <div className="relative">
+                <select
+                  value={selectedFramework}
+                  onChange={(e) => setSelectedFramework(e.target.value)}
+                  className="w-full pl-4 pr-10 py-3 bg-indigo-50/50 border border-indigo-200 text-indigo-900 rounded-xl text-xs font-bold outline-none appearance-none cursor-pointer"
+                >
+                  {getFrameworksForAutomation(selectedTool, selectedLanguage).map(f => (
+                    <option key={f} value={f}>{f}</option>
+                  ))}
+                </select>
+                <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 text-indigo-400 pointer-events-none" size={14} />
+              </div>
+              <p className="text-[10px] text-slate-400 font-medium ml-2 mt-1.5">
+                Generates complete folder structure, runners, page classes, and assertions tailored for {selectedFramework}.
+              </p>
+            </div>
+
+            {/* Upload BDD Document Section */}
+            <div className="pt-2 border-t border-slate-100 space-y-3">
+              <div className="flex items-center justify-between">
+                <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest flex items-center gap-1.5">
+                  <FileText size={12} className="text-indigo-600" />
+                  BDD Document / Feature File (Optional)
+                </label>
+                {uploadedBddDoc && (
+                  <span className="text-[9px] font-black px-2 py-0.5 bg-emerald-50 text-emerald-700 border border-emerald-200 rounded-full flex items-center gap-1">
+                    <CheckCircle2 size={10} /> Active
+                  </span>
+                )}
+              </div>
+
+              {!uploadedBddDoc ? (
+                <div className="relative">
+                  <input
+                    type="file"
+                    id="bdd-doc-upload-input"
+                    accept=".feature,.txt,.doc,.docx,.pdf,.gherkin,.md,.json"
+                    disabled={isBddUploading}
+                    onChange={async (e) => {
+                      const file = e.target.files?.[0];
+                      if (!file) return;
+                      setIsBddUploading(true);
+                      try {
+                        const text = await file.text();
+                        const parsed = parseBddDocument(text, file.name);
+                        setUploadedBddDoc(parsed);
+                        setUploadedBddFileName(file.name);
+
+                        // Auto-select BDD/Cucumber framework if available
+                        const available = getFrameworksForAutomation(selectedTool, selectedLanguage);
+                        const bddOption = available.find(f => f.toLowerCase().includes('cucumber') || f.toLowerCase().includes('bdd') || f.toLowerCase().includes('behave'));
+                        if (bddOption) {
+                          setSelectedFramework(bddOption);
+                        }
+
+                        toast.success(`Parsed BDD Document: "${file.name}" (${parsed.scenarios.length} scenarios)`);
+                      } catch (err: any) {
+                        toast.error(err.message || 'Failed to parse BDD document');
+                      } finally {
+                        setIsBddUploading(false);
+                      }
+                    }}
+                    className="hidden"
+                  />
+                  <label
+                    htmlFor="bdd-doc-upload-input"
+                    className="flex flex-col items-center justify-center p-4 border-2 border-dashed border-slate-200 hover:border-indigo-400 hover:bg-indigo-50/20 rounded-2xl cursor-pointer transition-all text-center group"
+                  >
+                    <UploadCloud size={20} className="text-slate-400 group-hover:text-indigo-600 transition-colors mb-1.5" />
+                    <span className="text-xs font-bold text-slate-700 group-hover:text-indigo-700">
+                      {isBddUploading ? 'Parsing BDD Document...' : 'Upload BDD Document (.feature / .docx / .txt)'}
+                    </span>
+                    <span className="text-[10px] text-slate-400 mt-0.5">
+                      Gherkin feature files, Given-When-Then user stories, or test specifications
+                    </span>
+                  </label>
+                </div>
+              ) : (
+                <div className="p-3.5 bg-slate-50 border border-slate-200 rounded-2xl space-y-2.5">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <div className="p-1.5 bg-indigo-100 text-indigo-700 rounded-lg shrink-0">
+                        <FileCheck size={14} />
+                      </div>
+                      <div className="truncate">
+                        <p className="text-xs font-black text-slate-800 truncate">{uploadedBddFileName}</p>
+                        <p className="text-[10px] text-slate-500 font-medium">
+                          {uploadedBddDoc.featureTitle || 'BDD Feature'} • {uploadedBddDoc.scenarios.length} Scenarios • {uploadedBddDoc.scenarios.reduce((acc, s) => acc + (s.steps?.length || 0), 0)} Steps
+                        </p>
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setUploadedBddDoc(null);
+                        setUploadedBddFileName('');
+                        toast.info('BDD document removed');
+                      }}
+                      className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors cursor-pointer shrink-0"
+                      title="Remove BDD document"
+                    >
+                      <Trash2 size={13} />
+                    </button>
+                  </div>
+
+                  {uploadedBddDoc.tags && uploadedBddDoc.tags.length > 0 && (
+                    <div className="flex flex-wrap gap-1 pt-1">
+                      {uploadedBddDoc.tags.map((tag, tIdx) => (
+                        <span key={tIdx} className="text-[9px] font-mono px-1.5 py-0.5 bg-indigo-50 text-indigo-700 rounded">
+                          {tag}
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
 
             {/* Removed "Generate POM Scripts" button from here as requested */}
@@ -5653,6 +5485,15 @@ ${scriptSteps.map(step => formatStepToScript(step, 'web')).join('\n')}
                       >
                         <AlertTriangle size={12} className="animate-bounce" />
                         {activeDiagnostics.length} Diagnostic Notice{activeDiagnostics.length > 1 ? 's' : ''}
+                      </button>
+                    )}
+                    {pendingPermissionRequest && (
+                      <button
+                        onClick={() => {}}
+                        className="px-2.5 py-1 bg-rose-500/20 text-rose-300 border border-rose-500/40 rounded-lg text-[9px] font-black uppercase tracking-wider flex items-center gap-1.5 animate-pulse"
+                      >
+                        <ShieldAlert size={12} />
+                        Permission Gate Open
                       </button>
                     )}
                     <div className="px-3 py-1 bg-slate-800 rounded-lg text-[10px] font-bold text-slate-400 flex items-center gap-2">
@@ -5836,9 +5677,9 @@ ${scriptSteps.map(step => formatStepToScript(step, 'web')).join('\n')}
                             </div>
                             <h4 className={`text-[11px] font-black text-slate-100 uppercase tracking-wider ${step.skipped ? 'line-through' : ''}`}>
                               {step.action === 'fill' ? (
-                                 <span>Entered {step.masked ? <span className="text-amber-400 font-bold">SENSITIVE DATA ({step.placeholder})</span> : `"${step.value}"`} in "{step.platform === 'mobile' ? getFriendlyMobileStepName(step) : (step.elementName || step.locator.primary.value)}"</span>
+                                 <span>Entered {step.masked ? <span className="text-amber-400 font-bold">SENSITIVE DATA ({step.placeholder})</span> : `"${step.value}"`} in "{step.elementName || step.locator.primary.value}"</span>
                                ) :
-                               step.action === 'click' ? `Tapped "${step.platform === 'mobile' ? getFriendlyMobileStepName(step) : (step.elementName || step.locator.primary.value)}"` :
+                               step.action === 'click' ? `Clicked "${step.elementName || step.locator.primary.value}"` :
                                step.action === 'navigate' ? `Redirected to "${step.value}"` :
                                step.action === 'upload' ? `Uploaded to "${step.elementName || step.locator.primary.value}": ${step.value}` :
                                step.action === 'scroll' ? `Scrolled page` :
@@ -5861,9 +5702,7 @@ ${scriptSteps.map(step => formatStepToScript(step, 'web')).join('\n')}
 
                         <div className="bg-slate-950/50 rounded-lg p-3 border border-slate-800/50">
                           <code className="text-[10px] font-mono text-emerald-400 block">
-                            {isTechnicalMobileLocator(step)
-                              ? 'Visual tap position saved for reliable playback'
-                              : selectedTool === 'Playwright' && step.locator.primary.playwright 
+                            {selectedTool === 'Playwright' && step.locator.primary.playwright 
                               ? step.locator.primary.playwright 
                               : step.locator.primary.value}
                           </code>
@@ -6025,13 +5864,13 @@ ${scriptSteps.map(step => formatStepToScript(step, 'web')).join('\n')}
                         navigator.clipboard.writeText(generatedPlaywrightScript);
                         toast.success("Script copied to clipboard!");
                       }}
-                      className="px-4 py-2 bg-slate-800 text-slate-300 rounded-xl font-bold text-[10px] uppercase tracking-widest hover:bg-slate-700 transition-all"
+                      className="px-4 py-2 bg-slate-800 text-slate-300 rounded-xl font-bold text-[10px] uppercase tracking-widest hover:bg-slate-700 transition-all cursor-pointer"
                     >
                       Copy Script
                     </button>
                     <button 
-                      onClick={handleSaveFlow}
-                      className="px-4 py-2 bg-indigo-600 text-white rounded-xl font-bold text-[10px] uppercase tracking-widest hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-500/20"
+                      onClick={handleSaveScript}
+                      className="px-4 py-2 bg-indigo-600 text-white rounded-xl font-bold text-[10px] uppercase tracking-widest hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-500/20 cursor-pointer"
                     >
                       Save Script
                     </button>
@@ -6168,15 +6007,21 @@ ${scriptSteps.map(step => formatStepToScript(step, 'web')).join('\n')}
               <div className="p-8 bg-slate-50 border-t border-slate-100 flex gap-3">
                 <button 
                   onClick={() => setShowScriptPreview(false)}
-                  className="flex-1 py-4 bg-white border border-slate-200 text-slate-600 rounded-2xl font-black text-xs uppercase tracking-widest hover:bg-slate-100 transition-all"
+                  className="px-6 py-4 bg-white border border-slate-200 text-slate-600 rounded-2xl font-black text-xs uppercase tracking-widest hover:bg-slate-100 transition-all cursor-pointer"
                 >
                   Close
                 </button>
                 <button 
                   onClick={handleSaveFlow}
-                  className="flex-1 py-4 bg-indigo-600 text-white rounded-2xl font-black text-xs uppercase tracking-widest hover:bg-indigo-700 shadow-xl shadow-indigo-200 transition-all"
+                  className="flex-1 py-4 bg-white border border-indigo-200 text-indigo-600 rounded-2xl font-black text-xs uppercase tracking-widest hover:bg-indigo-50 shadow-sm transition-all cursor-pointer"
                 >
                   Save Flow
+                </button>
+                <button 
+                  onClick={handleSaveScript}
+                  className="flex-1 py-4 bg-emerald-600 text-white rounded-2xl font-black text-xs uppercase tracking-widest hover:bg-emerald-700 shadow-xl shadow-emerald-200 transition-all cursor-pointer"
+                >
+                  Save Script
                 </button>
               </div>
             </motion.div>
@@ -6716,6 +6561,53 @@ ${scriptSteps.map(step => formatStepToScript(step, 'web')).join('\n')}
                 </div>
                 <div className="flex items-center gap-3">
                   <button 
+                    onClick={async () => {
+                      const filesToSave = generatedProject.files || [];
+                      const mainFile = filesToSave.find(f => f.path.includes('spec') || f.path.includes('test')) || filesToSave[0];
+                      const scriptTitle = (saveScriptTitle || `${flowName || 'Automation Script'} - ${selectedTool}`).trim();
+                      
+                      const existingIndex = (project.automationScripts || []).findIndex(s => s.title.toLowerCase() === scriptTitle.toLowerCase());
+                      let updatedScripts = [...(project.automationScripts || [])];
+
+                      if (existingIndex >= 0) {
+                        updatedScripts[existingIndex] = {
+                          ...updatedScripts[existingIndex],
+                          isApproved: true,
+                          content: mainFile?.content || updatedScripts[existingIndex].content,
+                          files: filesToSave
+                        };
+                      } else {
+                        const newScript: AutomationScript = {
+                          id: Math.random().toString(36).substr(2, 9),
+                          title: scriptTitle,
+                          description: flowDescription || `Automation script generated from flow`,
+                          content: mainFile?.content || '',
+                          files: filesToSave,
+                          tool: selectedTool,
+                          language: selectedLanguage,
+                          createdAt: new Date().toISOString(),
+                          folderId: selectedFolder || undefined,
+                          isApproved: true,
+                          source: 'record_play',
+                          platform: platform,
+                          appPackage: platform === 'mobile' ? (mobilePackageName || mobileApkName || 'com.example.app') : undefined,
+                          appUrl: platform === 'web' ? targetUrl : undefined
+                        };
+                        updatedScripts.push(newScript);
+                      }
+
+                      await onUpdateProject({
+                        ...project,
+                        automationScripts: updatedScripts
+                      });
+                      toast.success('Script approved and added to Execution Hub!');
+                    }}
+                    className="flex items-center gap-2 px-5 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-bold text-xs uppercase tracking-widest transition-all shadow-lg shadow-emerald-100 cursor-pointer"
+                    title="Approve and make available in Execution Hub"
+                  >
+                    <CheckCircle2 size={16} /> Approve
+                  </button>
+                  <button 
                     onClick={() => {
                       const mainFile = generatedProject.files.find(f => f.path.includes('spec') || f.path.includes('test')) || generatedProject.files[0];
                       if (mainFile) handleDownloadFile(mainFile.path, mainFile.content);
@@ -6732,13 +6624,13 @@ ${scriptSteps.map(step => formatStepToScript(step, 'web')).join('\n')}
                   </button>
                   <button 
                     onClick={handleSaveScript}
-                    className="flex items-center gap-2 px-5 py-2.5 bg-emerald-600 text-white rounded-xl font-bold text-xs uppercase tracking-widest hover:bg-emerald-700 transition-all shadow-lg shadow-emerald-100"
+                    className="flex items-center gap-2 px-5 py-2.5 bg-slate-900 text-white rounded-xl font-bold text-xs uppercase tracking-widest hover:bg-slate-800 transition-all shadow-lg shadow-slate-200"
                   >
                     <Save size={16} /> Save to Repo
                   </button>
                   <button 
                     onClick={() => setIsPreviewOpen(false)}
-                    className="p-2.5 text-slate-400 hover:text-slate-600 transition-colors"
+                    className="p-2.5 text-slate-400 hover:text-slate-600 transition-colors cursor-pointer"
                   >
                     <X size={24} />
                   </button>
@@ -7136,8 +7028,8 @@ ${scriptSteps.map(step => formatStepToScript(step, 'web')).join('\n')}
                 </button>
                 <button 
                   onClick={executeSaveScript}
-                  disabled={!saveScriptTitle.trim() || (isCreatingNewScriptFolder ? !newScriptFolderName.trim() : !selectedFolder)}
-                  className="px-8 py-3 bg-emerald-600 text-white rounded-xl font-black text-[10px] uppercase tracking-widest hover:bg-emerald-700 transition-all shadow-lg shadow-emerald-100 active:scale-95 disabled:opacity-50"
+                  disabled={!saveScriptTitle.trim() || (isCreatingNewScriptFolder && !newScriptFolderName.trim())}
+                  className="px-8 py-3 bg-emerald-600 text-white rounded-xl font-black text-[10px] uppercase tracking-widest hover:bg-emerald-700 transition-all shadow-lg shadow-emerald-100 active:scale-95 disabled:opacity-50 cursor-pointer"
                 >
                   Confirm & Save Script
                 </button>
@@ -7916,57 +7808,7 @@ ${scriptSteps.map(step => formatStepToScript(step, 'web')).join('\n')}
                 
                 {/* Visual View (Iframe or Simulator Frame) */}
                 <div className="flex-1 bg-slate-950 p-6 flex flex-col justify-between overflow-y-auto custom-scrollbar border-r border-slate-800">
-                  {activeVideoUrl ? (
-                    /* Session video: what the recording actually did. Nothing is
-                       executed against the site while this plays. */
-                    <div className="w-full h-full bg-slate-900 rounded-2xl border border-slate-800 overflow-hidden flex flex-col relative min-h-[350px]">
-                      <div className="px-4 py-2 bg-slate-950 border-b border-slate-800 flex items-center justify-between">
-                        <div className="flex items-center gap-2 min-w-0">
-                          <Video size={14} className="text-emerald-400 shrink-0" />
-                          <span className="text-[11px] font-black text-emerald-300 uppercase tracking-widest">
-                            Recorded Session Video
-                          </span>
-                          <span className="text-[10px] text-slate-500 truncate">
-                            {playbackFlow?.steps?.length || 0} steps captured
-                          </span>
-                        </div>
-                        <button
-                          onClick={() => {
-                            setActiveVideoUrl(null);
-                            setPlaybackUsesVideo(false);
-                            setPlaybackLogs(prev => [...prev, {
-                              timestamp: new Date().toLocaleTimeString(),
-                              level: 'info',
-                              message: '⚙️ Switched to the automation engine. Press Play to execute the steps against the live site.'
-                            }]);
-                          }}
-                          className="px-2 py-0.5 rounded border border-slate-700 bg-slate-800 text-slate-300 text-[9px] font-black uppercase tracking-wider hover:bg-slate-700 transition-all flex items-center gap-1.5 shrink-0"
-                          title="Run the recorded steps against the live site instead of watching the video"
-                        >
-                          <Play size={10} /> Run Automation Instead
-                        </button>
-                      </div>
-                      <div className="flex-1 bg-black flex items-center justify-center">
-                        <video
-                          key={activeVideoUrl}
-                          src={activeVideoUrl}
-                          controls
-                          autoPlay
-                          className="w-full h-full object-contain"
-                          onError={() => {
-                            setPlaybackLogs(prev => [...prev, {
-                              timestamp: new Date().toLocaleTimeString(),
-                              level: 'error',
-                              message: 'Could not load the session video file. It may have been cleared from the server.'
-                            }]);
-                          }}
-                        />
-                      </div>
-                      <div className="px-4 py-2 bg-slate-950 border-t border-slate-800 text-[10px] text-slate-500">
-                        This is a replay of the recorded session. No actions are being performed on the site, so nothing is verified.
-                      </div>
-                    </div>
-                  ) : playbackFlow?.platform === 'web' ? (
+                  {playbackFlow?.platform === 'web' ? (
                     <div className="w-full h-full bg-slate-900 rounded-2xl border border-slate-800 overflow-hidden flex flex-col relative min-h-[350px]">
                       {/* Browser Address Bar */}
                       <div className="px-4 py-2 bg-slate-950 border-b border-slate-800 flex items-center justify-between">
@@ -8277,7 +8119,7 @@ ${scriptSteps.map(step => formatStepToScript(step, 'web')).join('\n')}
 
                       {/* Interactive Playback Completed Celebration Overlay on Mobile Stage */}
                       <AnimatePresence>
-                        {playbackStatus === 'completed' && playbackFlow?.platform !== 'mobile' && (
+                        {playbackStatus === 'completed' && (
                           <motion.div
                             initial={{ opacity: 0, scale: 0.95 }}
                             animate={{ opacity: 1, scale: 1 }}
@@ -8534,6 +8376,121 @@ ${scriptSteps.map(step => formatStepToScript(step, 'web')).join('\n')}
         initialUrl={targetUrl}
         screenshots={playbackStepScreenshots}
       />
+
+      {/* Optional Walkthrough Video Upload Modal (Supports up to 1GB) */}
+      <RecordPlayVideoUploadModal
+        isOpen={isVideoUploadModalOpen}
+        onClose={() => setIsVideoUploadModalOpen(false)}
+        initialTargetUrl={targetUrl && targetUrl !== 'https://' ? targetUrl : ''}
+        platform={platform}
+        project={project}
+        onUpdateProject={onUpdateProject}
+        onApplyStepsToFlow={(steps, metadata) => {
+          if (steps && steps.length > 0) {
+            setCurrentSteps(steps);
+            if (metadata.name) setFlowName(metadata.name);
+            if (metadata.description) setFlowDescription(metadata.description);
+            if (metadata.url && metadata.url !== 'https://') setTargetUrl(metadata.url);
+            setIsApproved(true);
+            setActivePanel('steps');
+            toast.success(`Successfully loaded ${steps.length} video-generated steps into Record & Play!`);
+          }
+        }}
+      />
+
+      {/* Universal Browser Permission Request Confirmation Modal */}
+      <AnimatePresence>
+        {pendingPermissionRequest && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[6000] flex items-center justify-center p-4 bg-slate-950/70 backdrop-blur-md"
+          >
+            <motion.div
+              initial={{ scale: 0.95, y: 15 }}
+              animate={{ scale: 1, y: 0 }}
+              exit={{ scale: 0.95, y: 15 }}
+              className="bg-white w-full max-w-lg rounded-[2.5rem] shadow-2xl border border-amber-200 overflow-hidden flex flex-col"
+            >
+              <div className="p-7 border-b border-amber-100 bg-amber-50/70 flex items-center justify-between">
+                <div className="flex items-center gap-3.5">
+                  <div className="p-3 bg-amber-500 rounded-2xl text-white shadow-lg shadow-amber-200">
+                    <ShieldAlert size={24} />
+                  </div>
+                  <div>
+                    <h3 className="text-lg font-black text-slate-800 uppercase tracking-tight">
+                      Browser Permission Required
+                    </h3>
+                    <p className="text-[10px] text-amber-800 font-bold uppercase tracking-widest mt-0.5">
+                      Security & Privacy Access Gate
+                    </p>
+                  </div>
+                </div>
+                <button 
+                  onClick={handleDenyPermission}
+                  className="p-2 text-slate-400 hover:text-slate-600 rounded-xl hover:bg-slate-100 transition-colors"
+                >
+                  <X size={20} />
+                </button>
+              </div>
+
+              <div className="p-7 space-y-5">
+                <div className="p-4 bg-slate-50 border border-slate-200 rounded-2xl">
+                  <p className="text-xs text-slate-600 font-medium leading-relaxed">
+                    The web application at <strong className="text-indigo-600 break-all">{pendingPermissionRequest.origin || targetUrl}</strong> is requesting access to browser hardware or protected APIs to continue.
+                  </p>
+                </div>
+
+                <div>
+                  <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest block mb-2.5">
+                    Requested Permissions
+                  </label>
+                  <div className="flex flex-wrap gap-2">
+                    {pendingPermissionRequest.permissions.map((perm, idx) => (
+                      <div
+                        key={idx}
+                        className="px-3.5 py-2 bg-indigo-50 border border-indigo-200 text-indigo-700 rounded-xl text-xs font-black uppercase tracking-wider flex items-center gap-2"
+                      >
+                        {perm === 'camera' && <Camera size={14} />}
+                        {perm === 'microphone' && <Mic size={14} />}
+                        {perm === 'geolocation' && <MapPin size={14} />}
+                        {perm === 'notifications' && <Radio size={14} />}
+                        {perm === 'clipboard' && <Copy size={14} />}
+                        {perm}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="p-3.5 bg-emerald-50 border border-emerald-100 rounded-xl text-[11px] text-emerald-800 font-medium">
+                  💡 Allowing grants <strong>only</strong> the requested permissions specifically for this recording session. Once granted, AutomatiQA will stabilize and transition directly to <strong>RECORDING_READY</strong>.
+                </div>
+              </div>
+
+              <div className="p-6 bg-slate-50 border-t border-slate-100 flex items-center justify-end gap-3">
+                <button
+                  type="button"
+                  onClick={handleDenyPermission}
+                  disabled={isGrantingPermission}
+                  className="px-5 py-3 rounded-xl font-bold text-xs uppercase tracking-wider text-slate-600 hover:bg-slate-200 transition-all cursor-pointer"
+                >
+                  Deny Request
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleGrantPermission()}
+                  disabled={isGrantingPermission}
+                  className="px-7 py-3 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-black text-xs uppercase tracking-widest transition-all shadow-lg shadow-emerald-200 flex items-center gap-2 cursor-pointer disabled:opacity-50"
+                >
+                  {isGrantingPermission ? <Loader2 size={15} className="animate-spin" /> : <ShieldCheck size={15} />}
+                  Allow & Continue Recording
+                </button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {/* Website Launch Diagnostics Modal */}
       <AnimatePresence>
