@@ -3459,6 +3459,180 @@ A clear step-by-step checkbox list for developers to execute and verify each fix
   return response.text || "Failed to generate resolution guide.";
 };
 
+// Gestures a user may legitimately repeat, so identical consecutive ones are only
+// merged when they land inside the capture window below
+const REPEATABLE_ACTIONS = new Set(['click', 'tap', 'double_tap', 'swipe', 'scroll', 'long_press', 'press']);
+// The inspector UI and the device agent both report the same physical mobile
+// action, and the two reports arrive within roughly this window
+const DUPLICATE_CAPTURE_WINDOW_MS = 1500;
+
+const normalizeAction = (s: any): string => {
+  const action = String(s?.action || '').toLowerCase();
+  return action === 'tap' ? 'click' : action === 'type' ? 'fill' : action;
+};
+
+// Stable signature for a recorded step, so repeats can be detected
+const getStepSignature = (s: any): string => {
+  if (!s) return '';
+  const action = normalizeAction(s);
+  const loc = String(s.locator?.primary?.value || '').trim();
+  const target = String(s.url || s.value || '').trim().replace(/\/+$/, '');
+  const el = String(s.elementName || '').trim().toLowerCase();
+  if (action === 'navigate') return `navigate|${target.toLowerCase()}`;
+  return `${action}|${loc}|${el}|${target}`;
+};
+
+// How much usable detail a step carries, so that when the same action was captured
+// twice the richer recording survives (a resolved node beats a coordinate placeholder)
+const getStepDetailScore = (s: any): number => {
+  if (!s) return -1;
+  let score = 0;
+  const type = String(s.locator?.primary?.type || '').toLowerCase();
+  if (String(s.locator?.primary?.value || '').trim()) score += 2;
+  if (['resource-id', 'accessibility-id', 'content-desc', 'testid', 'role', 'label'].includes(type)) score += 3;
+  else if (['text', 'css'].includes(type)) score += 2;
+  else if (type === 'xpath') score += 1;
+  if (Array.isArray(s.locator?.alternatives)) score += Math.min(s.locator.alternatives.length, 3);
+  if (s.locator?.primary?.playwright) score += 1;
+  const el = String(s.elementName || '').trim();
+  if (el && !/^(?:tap at|element at|coordinates|resolving)/i.test(el)) score += 2;
+  return score;
+};
+
+// A tap logged instantly from screen coordinates, before the device agent has
+// resolved which Android node was actually hit
+const isCoordinatePlaceholder = (s: any): boolean =>
+  !String(s?.locator?.primary?.value || '').trim() &&
+  /^(?:tap at|element at|coordinates|resolving)/i.test(String(s?.elementName || '').trim());
+
+// True when two steps describe the same interaction, even if one was captured
+// with weaker detail than the other
+const isSameInteraction = (a: any, b: any): boolean => {
+  if (normalizeAction(a) !== normalizeAction(b)) return false;
+  // A coordinate placeholder and the node the agent resolved for it
+  if (isCoordinatePlaceholder(a) !== isCoordinatePlaceholder(b)) return true;
+  const locA = String(a.locator?.primary?.value || '').trim();
+  const locB = String(b.locator?.primary?.value || '').trim();
+  if (locA && locB) return locA === locB;
+  const elA = String(a.elementName || '').trim().toLowerCase();
+  const elB = String(b.elementName || '').trim().toLowerCase();
+  if (elA && elB) return elA === elB;
+  const valA = String(a.value || '').trim().toLowerCase();
+  const valB = String(b.value || '').trim().toLowerCase();
+  return !!valA && valA === valB;
+};
+
+const withinCaptureWindow = (a: any, b: any): boolean => {
+  // Compare against the most recent copy of this interaction, not the first one
+  // seen. A burst of repeats would otherwise drift out of the window part-way
+  // through and start recording duplicates again.
+  const ta = Number(a?.lastSeenAt) || Number(a?.timestamp) || 0;
+  const tb = Number(b?.timestamp) || 0;
+  // Missing timestamps cannot rule a duplicate out, so treat them as close together
+  if (!ta || !tb) return true;
+  return Math.abs(tb - ta) <= DUPLICATE_CAPTURE_WINDOW_MS;
+};
+
+/**
+ * True when an incoming recorder event repeats the step just captured - the same
+ * gesture reported by both the inspector UI and the device agent, rather than a
+ * second deliberate interaction. Used at capture time so repeats never land in
+ * the step list to begin with.
+ */
+export const isDuplicateOfRecordedStep = (lastStep: any, incoming: any): boolean => {
+  if (!lastStep || !incoming) return false;
+  if (!REPEATABLE_ACTIONS.has(normalizeAction(incoming))) return false;
+  return isSameInteraction(lastStep, incoming) && withinCaptureWindow(lastStep, incoming);
+};
+
+/**
+ * Of two recordings of the same interaction, returns the one carrying the better
+ * locator, keeping the original step's id and position in the flow.
+ */
+export const pickRicherRecordedStep = (lastStep: any, incoming: any): any => {
+  const kept = getStepDetailScore(incoming) > getStepDetailScore(lastStep)
+    ? { ...incoming, id: lastStep.id, timestamp: lastStep.timestamp ?? incoming.timestamp }
+    : { ...lastStep };
+  // Slide the duplicate window forward so a long burst keeps collapsing
+  kept.lastSeenAt = Number(incoming?.timestamp) || Date.now();
+  return kept;
+};
+
+/**
+ * Removes repeated recorded steps of every action type:
+ *  - a whole flow captured more than once end-to-end
+ *  - consecutive navigations to the same app/screen/url
+ *  - the same interaction reported twice (inspector UI + device agent), keeping
+ *    whichever copy carries the better locator
+ *  - consecutive typing into one field, keeping the final value
+ *  - a click that only focuses the field typed into next
+ */
+export const deduplicateRecordedSteps = (steps: any[]): any[] => {
+  if (!Array.isArray(steps) || steps.length < 2) return Array.isArray(steps) ? steps.filter(Boolean) : [];
+
+  let working = steps.filter(Boolean);
+
+  // Collapse a flow captured as the same block repeated end-to-end (2x, 3x, ...).
+  // Only when every repetition restarts with a navigation, so genuinely repetitive
+  // interactions (tapping one button several times) are left alone.
+  const signatures = working.map(getStepSignature);
+  const startsWithNavigation = normalizeAction(working[0]) === 'navigate';
+  for (let blockSize = 2; startsWithNavigation && blockSize <= Math.floor(working.length / 2); blockSize++) {
+    if (working.length % blockSize !== 0) continue;
+    let isRepeatedBlock = true;
+    for (let i = blockSize; i < signatures.length && isRepeatedBlock; i++) {
+      if (signatures[i] !== signatures[i % blockSize]) isRepeatedBlock = false;
+    }
+    if (isRepeatedBlock) {
+      working = working.slice(0, blockSize);
+      break;
+    }
+  }
+
+  const result: any[] = [];
+  for (const s of working) {
+    const prev = result[result.length - 1];
+    if (!prev) {
+      result.push(s);
+      continue;
+    }
+
+    const action = normalizeAction(s);
+    const prevAction = normalizeAction(prev);
+    const loc = String(s.locator?.primary?.value || '').trim();
+    const prevLoc = String(prev.locator?.primary?.value || '').trim();
+
+    // The same navigation target twice in a row
+    if (action === 'navigate' && prevAction === 'navigate' && getStepSignature(s) === getStepSignature(prev)) {
+      continue;
+    }
+
+    // Repeated typing into the same field: keep only the final value
+    if (action === 'fill' && prevAction === 'fill' && loc && prevLoc && loc === prevLoc) {
+      prev.value = s.value;
+      continue;
+    }
+
+    // A click that only focuses the field typed into next
+    if (action === 'fill' && prevAction === 'click' && loc && prevLoc && loc === prevLoc) {
+      result[result.length - 1] = s;
+      continue;
+    }
+
+    // The same tap / swipe / long press / key press captured twice - drop the
+    // weaker copy rather than whichever happened to arrive second
+    if (REPEATABLE_ACTIONS.has(action) && isSameInteraction(prev, s) && withinCaptureWindow(prev, s)) {
+      result[result.length - 1] = pickRicherRecordedStep(prev, s);
+      continue;
+    }
+
+    result.push(s);
+  }
+
+  // Bookkeeping only - it must not reach saved flows or generated scripts
+  return result.map(({ lastSeenAt, ...step }: any) => step);
+};
+
 export const generateLocalOptimizedSteps = (
   flowName: string,
   steps: any[],
@@ -3480,9 +3654,10 @@ export const generateLocalOptimizedSteps = (
   }
 
   // Clean and deduplicate steps
+  const dedupedSteps = deduplicateRecordedSteps(steps);
   const cleanedSteps: any[] = [];
-  for (let i = 0; i < steps.length; i++) {
-    const s = steps[i];
+  for (let i = 0; i < dedupedSteps.length; i++) {
+    const s = dedupedSteps[i];
     if (!s) continue;
     const prev = cleanedSteps[cleanedSteps.length - 1];
 
@@ -3596,7 +3771,7 @@ export const generateLocalOptimizedSteps = (
     optimizedSteps: cleanedSteps,
     pomStructure: pomStructure || '// Page Object Model structure initialized.',
     suggestedTitle: flowName ? `${flowName} - Enhanced Test Flow` : 'Automated Recorded Flow',
-    explanation: `Successfully optimized ${cleanedSteps.length} recorded steps into Page Object Model structure with clean locators.`
+    explanation: `Optimized ${steps.length} recorded steps into ${cleanedSteps.length} unique steps${steps.length > cleanedSteps.length ? ` (removed ${steps.length - cleanedSteps.length} repeated step${steps.length - cleanedSteps.length === 1 ? '' : 's'})` : ''} with Page Object Model structure and clean locators.`
   };
 };
 
@@ -3611,8 +3786,11 @@ export const enhanceRecordedScript = async (
   suggestedTitle: string;
   explanation: string;
 }> => {
+  // Collapse repeats up front so the AI never sees - or echoes back - duplicates
+  const uniqueSteps = deduplicateRecordedSteps(steps || []);
+
   // Sanitize steps to remove large binary data / snapshots before calling AI
-  const sanitizedSteps = (steps || []).map((s: any) => ({
+  const sanitizedSteps = uniqueSteps.map((s: any) => ({
     id: String(s.id || Math.random().toString(36).substring(2, 9)),
     action: s.action || 'click',
     screen: s.screen || 'MainPage',
@@ -3638,12 +3816,13 @@ export const enhanceRecordedScript = async (
         new Promise<any>((_, reject) => setTimeout(() => reject(new Error('AI Enhancement timed out')), 10000))
       ]);
       if (response && response.optimizedSteps && response.optimizedSteps.length > 0) {
-        return response;
+        // The model can still echo repeats back - collapse them before returning
+        return { ...response, optimizedSteps: deduplicateRecordedSteps(response.optimizedSteps) };
       }
-      return generateLocalOptimizedSteps(flowName, steps, tool, language);
+      return generateLocalOptimizedSteps(flowName, uniqueSteps, tool, language);
     } catch (err) {
       console.warn("AI enhancement failed or timed out in browser, using local optimizer:", err);
-      return generateLocalOptimizedSteps(flowName, steps, tool, language);
+      return generateLocalOptimizedSteps(flowName, uniqueSteps, tool, language);
     }
   }
 
@@ -3759,8 +3938,8 @@ export const enhanceRecordedScript = async (
       const parsed = JSON.parse(response.text || '{}');
       const rawOptSteps = Array.isArray(parsed.optimizedSteps) ? parsed.optimizedSteps : [];
 
-      // Guarantee 100% of recorded steps are preserved in exact sequence
-      const guaranteedSteps = steps.map((origStep, idx) => {
+      // Guarantee every distinct recorded step is preserved in exact sequence
+      const guaranteedSteps = uniqueSteps.map((origStep: any, idx: number) => {
         const aiStep = rawOptSteps.find((s: any) => s && s.id === origStep.id) || rawOptSteps[idx];
         if (!aiStep) return origStep;
 
@@ -3788,7 +3967,7 @@ export const enhanceRecordedScript = async (
       });
 
       return {
-        optimizedSteps: guaranteedSteps,
+        optimizedSteps: deduplicateRecordedSteps(guaranteedSteps),
         pomStructure: parsed.pomStructure || "POM Structure generated.",
         suggestedTitle: parsed.suggestedTitle || flowName,
         explanation: parsed.explanation || "All recorded steps processed and enhanced."
@@ -3796,7 +3975,7 @@ export const enhanceRecordedScript = async (
     });
   } catch (error) {
     console.error("Script Enhancement Error:", error);
-    return generateLocalOptimizedSteps(flowName, steps, tool, language);
+    return generateLocalOptimizedSteps(flowName, uniqueSteps, tool, language);
   }
 };
 

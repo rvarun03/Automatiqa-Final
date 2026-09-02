@@ -7944,10 +7944,935 @@
       "timestamp": 1788156344193,
       "hits": 0,
       "executionTimeMs": 10885
+    },
+    {
+      "key": "2447c516efda777abaef10c2cc99b907633be4f82bd13de66244fc4fa1301c2a",
+      "functionName": "enhanceRecordedScript",
+      "argsHash": "2447c516efda777abaef10c2cc99b907633be4f82bd13de66244fc4fa1301c2a",
+      "result": {
+        "optimizedSteps": [
+          {
+            "id": "ze374",
+            "action": "navigate",
+            "screen": "HomePage",
+            "elementName": "com.qalculate.android",
+            "url": "",
+            "value": "com.qalculate.android",
+            "platform": "mobile",
+            "placeholder": "",
+            "locator": {
+              "primary": {
+                "type": "url",
+                "value": "com.qalculate.android",
+                "playwright": "await page.goto('com.qalculate.android');"
+              },
+              "alternatives": []
+            }
+          },
+          {
+            "id": "0bsg1g",
+            "action": "click",
+            "screen": "ActiveScreen",
+            "elementName": "Home screen 1",
+            "url": "",
+            "value": "",
+            "platform": "mobile",
+            "placeholder": "",
+            "locator": {
+              "primary": {
+                "type": "accessibility-id",
+                "value": "Home screen 1",
+                "playwright": "await driver.elementByAccessibilityId(\"Home screen 1\").click();"
+              },
+              "alternatives": [
+                {
+                  "type": "accessibility-id",
+                  "value": "Home screen 1"
+                },
+                {
+                  "type": "xpath",
+                  "value": "//*[@content-desc=\"Home screen 1\"]"
+                }
+              ]
+            }
+          },
+          {
+            "id": "nfsp3h",
+            "action": "navigate",
+            "screen": "com.miles.one.MainActivity",
+            "elementName": "Screen: com.miles.one.MainActivity",
+            "url": "",
+            "value": "https://com.miles.one/com.miles.one.MainActivity",
+            "platform": "mobile",
+            "placeholder": "",
+            "locator": {
+              "primary": {
+                "type": "url",
+                "value": "https://com.miles.one/com.miles.one.MainActivity",
+                "playwright": "await page.goto('https://com.miles.one/com.miles.one.MainActivity');"
+              },
+              "alternatives": []
+            }
+          },
+          {
+            "id": "d3dwob",
+            "action": "navigate",
+            "screen": "com.miles.one.MainActivity",
+            "elementName": "Screen: com.miles.one.MainActivity",
+            "url": "",
+            "value": "com.miles.one/com.miles.one.MainActivity",
+            "platform": "mobile",
+            "placeholder": "",
+            "locator": {
+              "primary": {
+                "type": "url",
+                "value": "com.miles.one/com.miles.one.MainActivity",
+                "playwright": "await page.goto('com.miles.one/com.miles.one.MainActivity');"
+              },
+              "alternatives": []
+            }
+          },
+          {
+            "id": "a2j5i",
+            "action": "click",
+            "screen": "ActiveScreen",
+            "elementName": "Unlabelled Android element",
+            "url": "",
+            "value": "",
+            "platform": "mobile",
+            "placeholder": "",
+            "locator": {
+              "primary": {
+                "type": "xpath",
+                "value": "//android.view.View[@bounds=\"[0,0][1080,2400]\"]",
+                "playwright": "await driver.elementByXPath(\"//android.view.View[@bounds=\"[0,0][1080,2400]\"]\").click();"
+              },
+              "alternatives": [
+                {
+                  "type": "xpath",
+                  "value": "//android.view.View[@bounds=\"[0,0][1080,2400]\"]"
+                }
+              ]
+            }
+          },
+          {
+            "id": "k2xy7c",
+            "action": "click",
+            "screen": "ActiveScreen",
+            "elementName": "Button",
+            "url": "",
+            "value": "",
+            "platform": "mobile",
+            "placeholder": "",
+            "locator": {
+              "primary": {
+                "type": "xpath",
+                "value": "//android.widget.Button[@bounds=\"[0,88][132,220]\"]",
+                "playwright": "await driver.elementByXPath(\"//android.widget.Button[@bounds=\"[0,88][132,220]\"]\").click();"
+              },
+              "alternatives": [
+                {
+                  "type": "xpath",
+                  "value": "//android.widget.Button[@bounds=\"[0,88][132,220]\"]"
+                }
+              ]
+            }
+          },
+          {
+            "id": "6wm4ib",
+            "action": "click",
+            "screen": "ActiveScreen",
+            "elementName": "Unlabelled Android element",
+            "url": "",
+            "value": "",
+            "platform": "mobile",
+            "placeholder": "",
+            "locator": {
+              "primary": {
+                "type": "xpath",
+                "value": "//android.view.View[@bounds=\"[0,0][1080,2400]\"]",
+                "playwright": "await driver.elementByXPath(\"//android.view.View[@bounds=\"[0,0][1080,2400]\"]\").click();"
+              },
+              "alternatives": [
+                {
+                  "type": "xpath",
+                  "value": "//android.view.View[@bounds=\"[0,0][1080,2400]\"]"
+                }
+              ]
+            }
+          },
+          {
+            "id": "pr726l",
+            "action": "click",
+            "screen": "ActiveScreen",
+            "elementName": "Unlabelled Android element",
+            "url": "",
+            "value": "",
+            "platform": "mobile",
+            "placeholder": "",
+            "locator": {
+              "primary": {
+                "type": "xpath",
+                "value": "//android.view.View[@bounds=\"[0,0][1080,1694]\"]",
+                "playwright": "await driver.elementByXPath(\"//android.view.View[@bounds=\"[0,0][1080,1694]\"]\").click();"
+              },
+              "alternatives": [
+                {
+                  "type": "xpath",
+                  "value": "//android.view.View[@bounds=\"[0,0][1080,1694]\"]"
+                }
+              ]
+            }
+          }
+        ],
+        "pomStructure": "// --- HomePage Object ---\nclass HomePage {\n  constructor(private page: Page) {}\n  // NAVIGATE: com.qalculate.android\n  async navigate_com_qalculate_android() {\n    await page.goto('com.qalculate.android');\n  }\n}\n\n// --- ActiveScreen Object ---\nclass ActiveScreen {\n  constructor(private page: Page) {}\n  // CLICK: Home screen 1\n  async click_home_screen_1() {\n    await driver.elementByAccessibilityId(\"Home screen 1\").click();\n  }\n\n  // CLICK: Unlabelled Android element\n  async click_unlabelled_android_element() {\n    await driver.elementByXPath(\"//android.view.View[@bounds=\"[0,0][1080,2400]\"]\").click();\n  }\n\n  // CLICK: Button\n  async click_button() {\n    await driver.elementByXPath(\"//android.widget.Button[@bounds=\"[0,88][132,220]\"]\").click();\n  }\n\n  // CLICK: Unlabelled Android element\n  async click_unlabelled_android_element() {\n    await driver.elementByXPath(\"//android.view.View[@bounds=\"[0,0][1080,2400]\"]\").click();\n  }\n\n  // CLICK: Unlabelled Android element\n  async click_unlabelled_android_element() {\n    await driver.elementByXPath(\"//android.view.View[@bounds=\"[0,0][1080,1694]\"]\").click();\n  }\n}\n\n// --- com.miles.one.MainActivity Object ---\nclass com.miles.one.MainActivity {\n  constructor(private page: Page) {}\n  // NAVIGATE: Screen: com.miles.one.MainActivity\n  async navigate_screen__com_miles_one_mainactivity() {\n    await page.goto('https://com.miles.one/com.miles.one.MainActivity');\n  }\n\n  // NAVIGATE: Screen: com.miles.one.MainActivity\n  async navigate_screen__com_miles_one_mainactivity() {\n    await page.goto('com.miles.one/com.miles.one.MainActivity');\n  }\n}\n",
+        "suggestedTitle": "New Recording Flow - Enhanced Test Flow",
+        "explanation": "Optimized 8 recorded steps into 8 unique steps with Page Object Model structure and clean locators."
+      },
+      "timestamp": 1788255273922,
+      "hits": 0,
+      "executionTimeMs": 10709
+    },
+    {
+      "key": "9f2a6ec5795a1d5f14801fccccc5a178d7642e03c17db7764186b0315bcd7f47",
+      "functionName": "enhanceRecordedScript",
+      "argsHash": "9f2a6ec5795a1d5f14801fccccc5a178d7642e03c17db7764186b0315bcd7f47",
+      "result": {
+        "optimizedSteps": [
+          {
+            "id": "ze374",
+            "action": "navigate",
+            "screen": "HomePage",
+            "elementName": "com.qalculate.android",
+            "url": "",
+            "value": "com.qalculate.android",
+            "platform": "mobile",
+            "placeholder": "",
+            "locator": {
+              "primary": {
+                "type": "url",
+                "value": "com.qalculate.android",
+                "playwright": "await page.goto('com.qalculate.android');"
+              },
+              "alternatives": []
+            }
+          },
+          {
+            "id": "0bsg1g",
+            "action": "click",
+            "screen": "ActiveScreen",
+            "elementName": "Home screen 1",
+            "url": "",
+            "value": "",
+            "platform": "mobile",
+            "placeholder": "",
+            "locator": {
+              "primary": {
+                "type": "accessibility-id",
+                "value": "Home screen 1",
+                "playwright": "await driver.elementByAccessibilityId(\"Home screen 1\").click();"
+              },
+              "alternatives": [
+                {
+                  "type": "accessibility-id",
+                  "value": "Home screen 1"
+                },
+                {
+                  "type": "xpath",
+                  "value": "//*[@content-desc=\"Home screen 1\"]"
+                }
+              ]
+            }
+          },
+          {
+            "id": "nfsp3h",
+            "action": "navigate",
+            "screen": "com.miles.one.MainActivity",
+            "elementName": "Screen: com.miles.one.MainActivity",
+            "url": "",
+            "value": "https://com.miles.one/com.miles.one.MainActivity",
+            "platform": "mobile",
+            "placeholder": "",
+            "locator": {
+              "primary": {
+                "type": "url",
+                "value": "https://com.miles.one/com.miles.one.MainActivity",
+                "playwright": "await page.goto('https://com.miles.one/com.miles.one.MainActivity');"
+              },
+              "alternatives": []
+            }
+          },
+          {
+            "id": "d3dwob",
+            "action": "navigate",
+            "screen": "com.miles.one.MainActivity",
+            "elementName": "Screen: com.miles.one.MainActivity",
+            "url": "",
+            "value": "com.miles.one/com.miles.one.MainActivity",
+            "platform": "mobile",
+            "placeholder": "",
+            "locator": {
+              "primary": {
+                "type": "url",
+                "value": "com.miles.one/com.miles.one.MainActivity",
+                "playwright": "await page.goto('com.miles.one/com.miles.one.MainActivity');"
+              },
+              "alternatives": []
+            }
+          },
+          {
+            "id": "a2j5i",
+            "action": "click",
+            "screen": "ActiveScreen",
+            "elementName": "Unlabelled Android element",
+            "url": "",
+            "value": "",
+            "platform": "mobile",
+            "placeholder": "",
+            "locator": {
+              "primary": {
+                "type": "xpath",
+                "value": "//android.view.View[@bounds=\"[0,0][1080,2400]\"]",
+                "playwright": "await driver.elementByXPath(\"//android.view.View[@bounds=\"[0,0][1080,2400]\"]\").click();"
+              },
+              "alternatives": [
+                {
+                  "type": "xpath",
+                  "value": "//android.view.View[@bounds=\"[0,0][1080,2400]\"]"
+                }
+              ]
+            }
+          },
+          {
+            "id": "k2xy7c",
+            "action": "click",
+            "screen": "ActiveScreen",
+            "elementName": "Button",
+            "url": "",
+            "value": "",
+            "platform": "mobile",
+            "placeholder": "",
+            "locator": {
+              "primary": {
+                "type": "xpath",
+                "value": "//android.widget.Button[@bounds=\"[0,88][132,220]\"]",
+                "playwright": "await driver.elementByXPath(\"//android.widget.Button[@bounds=\"[0,88][132,220]\"]\").click();"
+              },
+              "alternatives": [
+                {
+                  "type": "xpath",
+                  "value": "//android.widget.Button[@bounds=\"[0,88][132,220]\"]"
+                }
+              ]
+            }
+          },
+          {
+            "id": "6wm4ib",
+            "action": "click",
+            "screen": "ActiveScreen",
+            "elementName": "Unlabelled Android element",
+            "url": "",
+            "value": "",
+            "platform": "mobile",
+            "placeholder": "",
+            "locator": {
+              "primary": {
+                "type": "xpath",
+                "value": "//android.view.View[@bounds=\"[0,0][1080,2400]\"]",
+                "playwright": "await driver.elementByXPath(\"//android.view.View[@bounds=\"[0,0][1080,2400]\"]\").click();"
+              },
+              "alternatives": [
+                {
+                  "type": "xpath",
+                  "value": "//android.view.View[@bounds=\"[0,0][1080,2400]\"]"
+                }
+              ]
+            }
+          },
+          {
+            "id": "pr726l",
+            "action": "click",
+            "screen": "ActiveScreen",
+            "elementName": "Unlabelled Android element",
+            "url": "",
+            "value": "",
+            "platform": "mobile",
+            "placeholder": "",
+            "locator": {
+              "primary": {
+                "type": "xpath",
+                "value": "//android.view.View[@bounds=\"[0,0][1080,1694]\"]",
+                "playwright": "await driver.elementByXPath(\"//android.view.View[@bounds=\"[0,0][1080,1694]\"]\").click();"
+              },
+              "alternatives": [
+                {
+                  "type": "xpath",
+                  "value": "//android.view.View[@bounds=\"[0,0][1080,1694]\"]"
+                }
+              ]
+            }
+          },
+          {
+            "id": "e4j8tj",
+            "action": "click",
+            "screen": "ActiveScreen",
+            "elementName": "Home screen 1",
+            "url": "",
+            "value": "",
+            "platform": "mobile",
+            "placeholder": "",
+            "locator": {
+              "primary": {
+                "type": "accessibility-id",
+                "value": "Home screen 1",
+                "playwright": "await driver.elementByAccessibilityId(\"Home screen 1\").click();"
+              },
+              "alternatives": [
+                {
+                  "type": "accessibility-id",
+                  "value": "Home screen 1"
+                },
+                {
+                  "type": "xpath",
+                  "value": "//*[@content-desc=\"Home screen 1\"]"
+                }
+              ]
+            }
+          },
+          {
+            "id": "6ipd1q",
+            "action": "click",
+            "screen": "ActiveScreen",
+            "elementName": "Unlabelled Android element",
+            "url": "",
+            "value": "",
+            "platform": "mobile",
+            "placeholder": "",
+            "locator": {
+              "primary": {
+                "type": "xpath",
+                "value": "//android.view.View[@bounds=\"[0,0][1080,2400]\"]",
+                "playwright": "await driver.elementByXPath(\"//android.view.View[@bounds=\"[0,0][1080,2400]\"]\").click();"
+              },
+              "alternatives": [
+                {
+                  "type": "xpath",
+                  "value": "//android.view.View[@bounds=\"[0,0][1080,2400]\"]"
+                }
+              ]
+            }
+          },
+          {
+            "id": "j6h3kf",
+            "action": "click",
+            "screen": "ActiveScreen",
+            "elementName": "Button",
+            "url": "",
+            "value": "",
+            "platform": "mobile",
+            "placeholder": "",
+            "locator": {
+              "primary": {
+                "type": "xpath",
+                "value": "//android.widget.Button[@bounds=\"[0,88][132,220]\"]",
+                "playwright": "await driver.elementByXPath(\"//android.widget.Button[@bounds=\"[0,88][132,220]\"]\").click();"
+              },
+              "alternatives": [
+                {
+                  "type": "xpath",
+                  "value": "//android.widget.Button[@bounds=\"[0,88][132,220]\"]"
+                }
+              ]
+            }
+          },
+          {
+            "id": "5c4gv5",
+            "action": "click",
+            "screen": "ActiveScreen",
+            "elementName": "Unlabelled Android element",
+            "url": "",
+            "value": "",
+            "platform": "mobile",
+            "placeholder": "",
+            "locator": {
+              "primary": {
+                "type": "xpath",
+                "value": "//android.view.View[@bounds=\"[0,0][1080,2400]\"]",
+                "playwright": "await driver.elementByXPath(\"//android.view.View[@bounds=\"[0,0][1080,2400]\"]\").click();"
+              },
+              "alternatives": [
+                {
+                  "type": "xpath",
+                  "value": "//android.view.View[@bounds=\"[0,0][1080,2400]\"]"
+                }
+              ]
+            }
+          },
+          {
+            "id": "7h3xov",
+            "action": "click",
+            "screen": "ActiveScreen",
+            "elementName": "Unlabelled Android element",
+            "url": "",
+            "value": "",
+            "platform": "mobile",
+            "placeholder": "",
+            "locator": {
+              "primary": {
+                "type": "xpath",
+                "value": "//android.view.View[@bounds=\"[0,0][1080,1694]\"]",
+                "playwright": "await driver.elementByXPath(\"//android.view.View[@bounds=\"[0,0][1080,1694]\"]\").click();"
+              },
+              "alternatives": [
+                {
+                  "type": "xpath",
+                  "value": "//android.view.View[@bounds=\"[0,0][1080,1694]\"]"
+                }
+              ]
+            }
+          }
+        ],
+        "pomStructure": "// --- HomePage Object ---\nclass HomePage {\n  constructor(private page: Page) {}\n  // NAVIGATE: com.qalculate.android\n  async navigate_com_qalculate_android() {\n    await page.goto('com.qalculate.android');\n  }\n}\n\n// --- ActiveScreen Object ---\nclass ActiveScreen {\n  constructor(private page: Page) {}\n  // CLICK: Home screen 1\n  async click_home_screen_1() {\n    await driver.elementByAccessibilityId(\"Home screen 1\").click();\n  }\n\n  // CLICK: Unlabelled Android element\n  async click_unlabelled_android_element() {\n    await driver.elementByXPath(\"//android.view.View[@bounds=\"[0,0][1080,2400]\"]\").click();\n  }\n\n  // CLICK: Button\n  async click_button() {\n    await driver.elementByXPath(\"//android.widget.Button[@bounds=\"[0,88][132,220]\"]\").click();\n  }\n\n  // CLICK: Unlabelled Android element\n  async click_unlabelled_android_element() {\n    await driver.elementByXPath(\"//android.view.View[@bounds=\"[0,0][1080,2400]\"]\").click();\n  }\n\n  // CLICK: Unlabelled Android element\n  async click_unlabelled_android_element() {\n    await driver.elementByXPath(\"//android.view.View[@bounds=\"[0,0][1080,1694]\"]\").click();\n  }\n\n  // CLICK: Home screen 1\n  async click_home_screen_1() {\n    await driver.elementByAccessibilityId(\"Home screen 1\").click();\n  }\n\n  // CLICK: Unlabelled Android element\n  async click_unlabelled_android_element() {\n    await driver.elementByXPath(\"//android.view.View[@bounds=\"[0,0][1080,2400]\"]\").click();\n  }\n\n  // CLICK: Button\n  async click_button() {\n    await driver.elementByXPath(\"//android.widget.Button[@bounds=\"[0,88][132,220]\"]\").click();\n  }\n\n  // CLICK: Unlabelled Android element\n  async click_unlabelled_android_element() {\n    await driver.elementByXPath(\"//android.view.View[@bounds=\"[0,0][1080,2400]\"]\").click();\n  }\n\n  // CLICK: Unlabelled Android element\n  async click_unlabelled_android_element() {\n    await driver.elementByXPath(\"//android.view.View[@bounds=\"[0,0][1080,1694]\"]\").click();\n  }\n}\n\n// --- com.miles.one.MainActivity Object ---\nclass com.miles.one.MainActivity {\n  constructor(private page: Page) {}\n  // NAVIGATE: Screen: com.miles.one.MainActivity\n  async navigate_screen__com_miles_one_mainactivity() {\n    await page.goto('https://com.miles.one/com.miles.one.MainActivity');\n  }\n\n  // NAVIGATE: Screen: com.miles.one.MainActivity\n  async navigate_screen__com_miles_one_mainactivity() {\n    await page.goto('com.miles.one/com.miles.one.MainActivity');\n  }\n}\n",
+        "suggestedTitle": "New Recording Flow - Enhanced Test Flow - Enhanced Test Flow",
+        "explanation": "Optimized 13 recorded steps into 13 unique steps with Page Object Model structure and clean locators."
+      },
+      "timestamp": 1788255297978,
+      "hits": 0,
+      "executionTimeMs": 11091
+    },
+    {
+      "key": "22e5acb42710d54c4e1b6f2513680b16e332ab235c60b82345a4103fe9d6a69d",
+      "functionName": "enhanceRecordedScript",
+      "argsHash": "22e5acb42710d54c4e1b6f2513680b16e332ab235c60b82345a4103fe9d6a69d",
+      "result": {
+        "optimizedSteps": [
+          {
+            "id": "ze374",
+            "action": "navigate",
+            "screen": "HomePage",
+            "elementName": "com.qalculate.android",
+            "url": "",
+            "value": "com.qalculate.android",
+            "platform": "mobile",
+            "placeholder": "",
+            "locator": {
+              "primary": {
+                "type": "url",
+                "value": "com.qalculate.android",
+                "playwright": "await page.goto('com.qalculate.android');"
+              },
+              "alternatives": []
+            }
+          },
+          {
+            "id": "0bsg1g",
+            "action": "click",
+            "screen": "ActiveScreen",
+            "elementName": "Home screen 1",
+            "url": "",
+            "value": "",
+            "platform": "mobile",
+            "placeholder": "",
+            "locator": {
+              "primary": {
+                "type": "accessibility-id",
+                "value": "Home screen 1",
+                "playwright": "await driver.elementByAccessibilityId(\"Home screen 1\").click();"
+              },
+              "alternatives": [
+                {
+                  "type": "accessibility-id",
+                  "value": "Home screen 1"
+                },
+                {
+                  "type": "xpath",
+                  "value": "//*[@content-desc=\"Home screen 1\"]"
+                }
+              ]
+            }
+          },
+          {
+            "id": "nfsp3h",
+            "action": "navigate",
+            "screen": "com.miles.one.MainActivity",
+            "elementName": "Screen: com.miles.one.MainActivity",
+            "url": "",
+            "value": "https://com.miles.one/com.miles.one.MainActivity",
+            "platform": "mobile",
+            "placeholder": "",
+            "locator": {
+              "primary": {
+                "type": "url",
+                "value": "https://com.miles.one/com.miles.one.MainActivity",
+                "playwright": "await page.goto('https://com.miles.one/com.miles.one.MainActivity');"
+              },
+              "alternatives": []
+            }
+          },
+          {
+            "id": "d3dwob",
+            "action": "navigate",
+            "screen": "com.miles.one.MainActivity",
+            "elementName": "Screen: com.miles.one.MainActivity",
+            "url": "",
+            "value": "com.miles.one/com.miles.one.MainActivity",
+            "platform": "mobile",
+            "placeholder": "",
+            "locator": {
+              "primary": {
+                "type": "url",
+                "value": "com.miles.one/com.miles.one.MainActivity",
+                "playwright": "await page.goto('com.miles.one/com.miles.one.MainActivity');"
+              },
+              "alternatives": []
+            }
+          },
+          {
+            "id": "a2j5i",
+            "action": "click",
+            "screen": "ActiveScreen",
+            "elementName": "Unlabelled Android element",
+            "url": "",
+            "value": "",
+            "platform": "mobile",
+            "placeholder": "",
+            "locator": {
+              "primary": {
+                "type": "xpath",
+                "value": "//android.view.View[@bounds=\"[0,0][1080,2400]\"]",
+                "playwright": "await driver.elementByXPath(\"//android.view.View[@bounds=\"[0,0][1080,2400]\"]\").click();"
+              },
+              "alternatives": [
+                {
+                  "type": "xpath",
+                  "value": "//android.view.View[@bounds=\"[0,0][1080,2400]\"]"
+                }
+              ]
+            }
+          },
+          {
+            "id": "k2xy7c",
+            "action": "click",
+            "screen": "ActiveScreen",
+            "elementName": "Button",
+            "url": "",
+            "value": "",
+            "platform": "mobile",
+            "placeholder": "",
+            "locator": {
+              "primary": {
+                "type": "xpath",
+                "value": "//android.widget.Button[@bounds=\"[0,88][132,220]\"]",
+                "playwright": "await driver.elementByXPath(\"//android.widget.Button[@bounds=\"[0,88][132,220]\"]\").click();"
+              },
+              "alternatives": [
+                {
+                  "type": "xpath",
+                  "value": "//android.widget.Button[@bounds=\"[0,88][132,220]\"]"
+                }
+              ]
+            }
+          },
+          {
+            "id": "6wm4ib",
+            "action": "click",
+            "screen": "ActiveScreen",
+            "elementName": "Unlabelled Android element",
+            "url": "",
+            "value": "",
+            "platform": "mobile",
+            "placeholder": "",
+            "locator": {
+              "primary": {
+                "type": "xpath",
+                "value": "//android.view.View[@bounds=\"[0,0][1080,2400]\"]",
+                "playwright": "await driver.elementByXPath(\"//android.view.View[@bounds=\"[0,0][1080,2400]\"]\").click();"
+              },
+              "alternatives": [
+                {
+                  "type": "xpath",
+                  "value": "//android.view.View[@bounds=\"[0,0][1080,2400]\"]"
+                }
+              ]
+            }
+          },
+          {
+            "id": "pr726l",
+            "action": "click",
+            "screen": "ActiveScreen",
+            "elementName": "Unlabelled Android element",
+            "url": "",
+            "value": "",
+            "platform": "mobile",
+            "placeholder": "",
+            "locator": {
+              "primary": {
+                "type": "xpath",
+                "value": "//android.view.View[@bounds=\"[0,0][1080,1694]\"]",
+                "playwright": "await driver.elementByXPath(\"//android.view.View[@bounds=\"[0,0][1080,1694]\"]\").click();"
+              },
+              "alternatives": [
+                {
+                  "type": "xpath",
+                  "value": "//android.view.View[@bounds=\"[0,0][1080,1694]\"]"
+                }
+              ]
+            }
+          },
+          {
+            "id": "e4j8tj",
+            "action": "click",
+            "screen": "ActiveScreen",
+            "elementName": "Home screen 1",
+            "url": "",
+            "value": "",
+            "platform": "mobile",
+            "placeholder": "",
+            "locator": {
+              "primary": {
+                "type": "accessibility-id",
+                "value": "Home screen 1",
+                "playwright": "await driver.elementByAccessibilityId(\"Home screen 1\").click();"
+              },
+              "alternatives": [
+                {
+                  "type": "accessibility-id",
+                  "value": "Home screen 1"
+                },
+                {
+                  "type": "xpath",
+                  "value": "//*[@content-desc=\"Home screen 1\"]"
+                }
+              ]
+            }
+          },
+          {
+            "id": "6ipd1q",
+            "action": "click",
+            "screen": "ActiveScreen",
+            "elementName": "Unlabelled Android element",
+            "url": "",
+            "value": "",
+            "platform": "mobile",
+            "placeholder": "",
+            "locator": {
+              "primary": {
+                "type": "xpath",
+                "value": "//android.view.View[@bounds=\"[0,0][1080,2400]\"]",
+                "playwright": "await driver.elementByXPath(\"//android.view.View[@bounds=\"[0,0][1080,2400]\"]\").click();"
+              },
+              "alternatives": [
+                {
+                  "type": "xpath",
+                  "value": "//android.view.View[@bounds=\"[0,0][1080,2400]\"]"
+                }
+              ]
+            }
+          },
+          {
+            "id": "j6h3kf",
+            "action": "click",
+            "screen": "ActiveScreen",
+            "elementName": "Button",
+            "url": "",
+            "value": "",
+            "platform": "mobile",
+            "placeholder": "",
+            "locator": {
+              "primary": {
+                "type": "xpath",
+                "value": "//android.widget.Button[@bounds=\"[0,88][132,220]\"]",
+                "playwright": "await driver.elementByXPath(\"//android.widget.Button[@bounds=\"[0,88][132,220]\"]\").click();"
+              },
+              "alternatives": [
+                {
+                  "type": "xpath",
+                  "value": "//android.widget.Button[@bounds=\"[0,88][132,220]\"]"
+                }
+              ]
+            }
+          },
+          {
+            "id": "5c4gv5",
+            "action": "click",
+            "screen": "ActiveScreen",
+            "elementName": "Unlabelled Android element",
+            "url": "",
+            "value": "",
+            "platform": "mobile",
+            "placeholder": "",
+            "locator": {
+              "primary": {
+                "type": "xpath",
+                "value": "//android.view.View[@bounds=\"[0,0][1080,2400]\"]",
+                "playwright": "await driver.elementByXPath(\"//android.view.View[@bounds=\"[0,0][1080,2400]\"]\").click();"
+              },
+              "alternatives": [
+                {
+                  "type": "xpath",
+                  "value": "//android.view.View[@bounds=\"[0,0][1080,2400]\"]"
+                }
+              ]
+            }
+          },
+          {
+            "id": "7h3xov",
+            "action": "click",
+            "screen": "ActiveScreen",
+            "elementName": "Unlabelled Android element",
+            "url": "",
+            "value": "",
+            "platform": "mobile",
+            "placeholder": "",
+            "locator": {
+              "primary": {
+                "type": "xpath",
+                "value": "//android.view.View[@bounds=\"[0,0][1080,1694]\"]",
+                "playwright": "await driver.elementByXPath(\"//android.view.View[@bounds=\"[0,0][1080,1694]\"]\").click();"
+              },
+              "alternatives": [
+                {
+                  "type": "xpath",
+                  "value": "//android.view.View[@bounds=\"[0,0][1080,1694]\"]"
+                }
+              ]
+            }
+          }
+        ],
+        "pomStructure": "// --- HomePage Object ---\nclass HomePage {\n  constructor(private page: Page) {}\n  // NAVIGATE: com.qalculate.android\n  async navigate_com_qalculate_android() {\n    await page.goto('com.qalculate.android');\n  }\n}\n\n// --- ActiveScreen Object ---\nclass ActiveScreen {\n  constructor(private page: Page) {}\n  // CLICK: Home screen 1\n  async click_home_screen_1() {\n    await driver.elementByAccessibilityId(\"Home screen 1\").click();\n  }\n\n  // CLICK: Unlabelled Android element\n  async click_unlabelled_android_element() {\n    await driver.elementByXPath(\"//android.view.View[@bounds=\"[0,0][1080,2400]\"]\").click();\n  }\n\n  // CLICK: Button\n  async click_button() {\n    await driver.elementByXPath(\"//android.widget.Button[@bounds=\"[0,88][132,220]\"]\").click();\n  }\n\n  // CLICK: Unlabelled Android element\n  async click_unlabelled_android_element() {\n    await driver.elementByXPath(\"//android.view.View[@bounds=\"[0,0][1080,2400]\"]\").click();\n  }\n\n  // CLICK: Unlabelled Android element\n  async click_unlabelled_android_element() {\n    await driver.elementByXPath(\"//android.view.View[@bounds=\"[0,0][1080,1694]\"]\").click();\n  }\n\n  // CLICK: Home screen 1\n  async click_home_screen_1() {\n    await driver.elementByAccessibilityId(\"Home screen 1\").click();\n  }\n\n  // CLICK: Unlabelled Android element\n  async click_unlabelled_android_element() {\n    await driver.elementByXPath(\"//android.view.View[@bounds=\"[0,0][1080,2400]\"]\").click();\n  }\n\n  // CLICK: Button\n  async click_button() {\n    await driver.elementByXPath(\"//android.widget.Button[@bounds=\"[0,88][132,220]\"]\").click();\n  }\n\n  // CLICK: Unlabelled Android element\n  async click_unlabelled_android_element() {\n    await driver.elementByXPath(\"//android.view.View[@bounds=\"[0,0][1080,2400]\"]\").click();\n  }\n\n  // CLICK: Unlabelled Android element\n  async click_unlabelled_android_element() {\n    await driver.elementByXPath(\"//android.view.View[@bounds=\"[0,0][1080,1694]\"]\").click();\n  }\n}\n\n// --- com.miles.one.MainActivity Object ---\nclass com.miles.one.MainActivity {\n  constructor(private page: Page) {}\n  // NAVIGATE: Screen: com.miles.one.MainActivity\n  async navigate_screen__com_miles_one_mainactivity() {\n    await page.goto('https://com.miles.one/com.miles.one.MainActivity');\n  }\n\n  // NAVIGATE: Screen: com.miles.one.MainActivity\n  async navigate_screen__com_miles_one_mainactivity() {\n    await page.goto('com.miles.one/com.miles.one.MainActivity');\n  }\n}\n",
+        "suggestedTitle": "New Recording Flow - Enhanced Test Flow - Enhanced Test Flow - Enhanced Test Flow",
+        "explanation": "Optimized 13 recorded steps into 13 unique steps with Page Object Model structure and clean locators."
+      },
+      "timestamp": 1788255435812,
+      "hits": 0,
+      "executionTimeMs": 10166
+    },
+    {
+      "key": "080e7a479e6730f4f9f24444d4c6192054cf164826b98a5dd86f4d9a4b8ef8f9",
+      "functionName": "enhanceRecordedScript",
+      "argsHash": "080e7a479e6730f4f9f24444d4c6192054cf164826b98a5dd86f4d9a4b8ef8f9",
+      "result": {
+        "optimizedSteps": [
+          {
+            "id": "kkrnqr",
+            "action": "navigate",
+            "screen": "HomePage",
+            "elementName": "com.qalculate.android",
+            "url": "",
+            "value": "com.qalculate.android",
+            "platform": "mobile",
+            "placeholder": "",
+            "locator": {
+              "primary": {
+                "type": "url",
+                "value": "com.qalculate.android",
+                "playwright": "await page.goto('com.qalculate.android');"
+              },
+              "alternatives": []
+            }
+          },
+          {
+            "id": "sn28f8",
+            "action": "click",
+            "screen": "ActiveScreen",
+            "elementName": "Home screen 1",
+            "url": "",
+            "value": "",
+            "platform": "mobile",
+            "placeholder": "",
+            "locator": {
+              "primary": {
+                "type": "accessibility-id",
+                "value": "Home screen 1",
+                "playwright": "await driver.elementByAccessibilityId(\"Home screen 1\").click();"
+              },
+              "alternatives": [
+                {
+                  "type": "accessibility-id",
+                  "value": "Home screen 1"
+                },
+                {
+                  "type": "xpath",
+                  "value": "//*[@content-desc=\"Home screen 1\"]"
+                }
+              ]
+            }
+          },
+          {
+            "id": "y7gstj",
+            "action": "navigate",
+            "screen": "com.miles.one.MainActivity",
+            "elementName": "Screen: com.miles.one.MainActivity",
+            "url": "",
+            "value": "https://com.miles.one/com.miles.one.MainActivity",
+            "platform": "mobile",
+            "placeholder": "",
+            "locator": {
+              "primary": {
+                "type": "url",
+                "value": "https://com.miles.one/com.miles.one.MainActivity",
+                "playwright": "await page.goto('https://com.miles.one/com.miles.one.MainActivity');"
+              },
+              "alternatives": []
+            }
+          },
+          {
+            "id": "eesu0g",
+            "action": "navigate",
+            "screen": "com.miles.one.MainActivity",
+            "elementName": "Screen: com.miles.one.MainActivity",
+            "url": "",
+            "value": "com.miles.one/com.miles.one.MainActivity",
+            "platform": "mobile",
+            "placeholder": "",
+            "locator": {
+              "primary": {
+                "type": "url",
+                "value": "com.miles.one/com.miles.one.MainActivity",
+                "playwright": "await page.goto('com.miles.one/com.miles.one.MainActivity');"
+              },
+              "alternatives": []
+            }
+          },
+          {
+            "id": "5wpu7m",
+            "action": "click",
+            "screen": "ActiveScreen",
+            "elementName": "Content",
+            "url": "",
+            "value": "",
+            "platform": "mobile",
+            "placeholder": "",
+            "locator": {
+              "primary": {
+                "type": "resource-id",
+                "value": "android:id/content",
+                "playwright": "await driver.elementById(\"android:id/content\").click();"
+              },
+              "alternatives": [
+                {
+                  "type": "resource-id",
+                  "value": "android:id/content"
+                },
+                {
+                  "type": "xpath",
+                  "value": "//*[@resource-id=\"android:id/content\"]"
+                }
+              ]
+            }
+          }
+        ],
+        "pomStructure": "// --- HomePage Object ---\nclass HomePage {\n  constructor(private page: Page) {}\n  // NAVIGATE: com.qalculate.android\n  async navigate_com_qalculate_android() {\n    await page.goto('com.qalculate.android');\n  }\n}\n\n// --- ActiveScreen Object ---\nclass ActiveScreen {\n  constructor(private page: Page) {}\n  // CLICK: Home screen 1\n  async click_home_screen_1() {\n    await driver.elementByAccessibilityId(\"Home screen 1\").click();\n  }\n\n  // CLICK: Content\n  async click_content() {\n    await driver.elementById(\"android:id/content\").click();\n  }\n}\n\n// --- com.miles.one.MainActivity Object ---\nclass com.miles.one.MainActivity {\n  constructor(private page: Page) {}\n  // NAVIGATE: Screen: com.miles.one.MainActivity\n  async navigate_screen__com_miles_one_mainactivity() {\n    await page.goto('https://com.miles.one/com.miles.one.MainActivity');\n  }\n\n  // NAVIGATE: Screen: com.miles.one.MainActivity\n  async navigate_screen__com_miles_one_mainactivity() {\n    await page.goto('com.miles.one/com.miles.one.MainActivity');\n  }\n}\n",
+        "suggestedTitle": "New Recording Flow - Enhanced Test Flow",
+        "explanation": "Optimized 5 recorded steps into 5 unique steps with Page Object Model structure and clean locators."
+      },
+      "timestamp": 1788257801653,
+      "hits": 0,
+      "executionTimeMs": 10269
     }
   ],
   "hitsCount": 3,
-  "missesCount": 67,
+  "missesCount": 71,
   "totalSavedTimeMs": 43459,
-  "savedAt": "2026-08-31T06:05:44.193Z"
+  "savedAt": "2026-09-01T10:16:41.654Z"
 }

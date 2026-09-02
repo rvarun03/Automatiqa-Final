@@ -124,23 +124,74 @@ function captureScreenshot(deviceId) {
   });
 }
 
-async function getElementAtCoordinates(deviceId, x, y) {
+// Cache of the live UIAutomator hierarchy, so a gesture can be resolved against
+// the screen as it was before that gesture was applied
+let cachedXmlHierarchy = { time: 0, xml: '' };
+
+// Framework-owned containers. They exist on every Android screen, so targeting
+// one identifies nothing about the app under test and makes a generated script
+// tap the root view instead of the control the user actually touched.
+const NON_TARGETABLE_IDS = new Set([
+  'android:id/content',
+  'android:id/decor_content_parent',
+  'android:id/action_bar_root',
+  'android:id/navigationBarBackground',
+  'android:id/statusBarBackground',
+  'com.android.systemui:id/navigation_bar_frame'
+]);
+
+function isTargetableNode(attrs) {
+  if (!attrs) return false;
+  const resourceId = attrs.resourceId || '';
+  if (resourceId && !NON_TARGETABLE_IDS.has(resourceId) && !resourceId.startsWith('android:id/')) return true;
+  return !!(attrs.text || attrs.contentDescription) && resourceId !== 'android:id/content';
+}
+
+async function dumpUiHierarchy(deviceId) {
   const tempPath = path.join(__dirname || '.', `window_dump_${deviceId.replace(/[^a-zA-Z0-9]/g, '_')}.xml`);
   const dumpRes = await runCmd(`adb -s ${deviceId} shell uiautomator dump /sdcard/window_dump.xml`);
-  if (!dumpRes.success) return null;
+  if (!dumpRes.success) return '';
 
   const pullRes = await runCmd(`adb -s ${deviceId} pull /sdcard/window_dump.xml "${tempPath}"`);
-  if (!pullRes.success) return null;
+  if (!pullRes.success) return '';
 
   try {
     if (fs.existsSync(tempPath)) {
       const xmlContent = fs.readFileSync(tempPath, 'utf8');
       fs.unlinkSync(tempPath);
+      if (xmlContent && xmlContent.includes('<hierarchy')) {
+        cachedXmlHierarchy = { time: Date.now(), xml: xmlContent };
+        return xmlContent;
+      }
+    }
+  } catch (err) {
+    console.error('Failed to read window XML dump:', err.message);
+  }
+  return '';
+}
+
+// Resolving a tap against a dump taken after it would describe the screen the tap
+// opened, so a snapshot from just before the gesture is always preferred.
+async function getHierarchyBeforeGesture(deviceId) {
+  if (cachedXmlHierarchy.xml && Date.now() - cachedXmlHierarchy.time < 2500) return cachedXmlHierarchy.xml;
+  return (await dumpUiHierarchy(deviceId)) || cachedXmlHierarchy.xml || '';
+}
+
+async function getElementAtCoordinates(deviceId, x, y, preloadedXml) {
+  try {
+    const xmlContent = preloadedXml || await dumpUiHierarchy(deviceId);
+    if (xmlContent) {
 
       const nodeRegex = /<node[^>]*bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"[^>]*>/g;
       let match;
-      let bestNodeStr = null;
-      let smallestArea = Infinity;
+      // A tap lands inside a whole stack of nested nodes. The innermost is often
+      // an anonymous wrapper (an ImageView inside a button) that no test could
+      // target, so identifiable nodes are chosen first and raw geometry only as
+      // a fallback.
+      let bestIdentifiable = null;
+      let bestIdentifiableArea = Infinity;
+      let bestAny = null;
+      let bestAnyArea = Infinity;
 
       while ((match = nodeRegex.exec(xmlContent)) !== null) {
         const nodeStr = match[0];
@@ -150,17 +201,42 @@ async function getElementAtCoordinates(deviceId, x, y) {
         const y2 = parseInt(match[4], 10);
 
         if (x >= x1 && x <= x2 && y >= y1 && y <= y2) {
-          const width = x2 - x1;
-          const height = y2 - y1;
-          const area = width * height;
-          if (area < smallestArea) {
-            smallestArea = area;
-            bestNodeStr = nodeStr;
+          const area = (x2 - x1) * (y2 - y1);
+          const entry = { nodeStr, bounds: `[${x1},${y1}][${x2},${y2}]` };
+
+          if (area < bestAnyArea) {
+            bestAnyArea = area;
+            bestAny = entry;
+          }
+
+          // Something a generated test can actually locate by
+          const readAttr = (name) => {
+            const m = nodeStr.match(new RegExp(`${name}="([^"]*)"`));
+            return m ? m[1] : '';
+          };
+          const candidate = {
+            resourceId: readAttr('resource-id'),
+            text: readAttr('text'),
+            contentDescription: readAttr('content-desc')
+          };
+          if (isTargetableNode(candidate) && area < bestIdentifiableArea) {
+            bestIdentifiableArea = area;
+            bestIdentifiable = entry;
           }
         }
       }
 
-      if (!bestNodeStr) return null;
+      // Never fall back to a framework container. Reporting no element keeps the
+      // step honest as a coordinate tap instead of emitting a locator that would
+      // click the root view on playback.
+      const best = bestIdentifiable || bestAny;
+      if (!best) return null;
+      if (!bestIdentifiable) {
+        const rootId = (best.nodeStr.match(/resource-id="([^"]*)"/) || [])[1] || '';
+        if (NON_TARGETABLE_IDS.has(rootId) || rootId.startsWith('android:id/')) return null;
+      }
+      const bestNodeStr = best.nodeStr;
+      const bestBounds = best.bounds;
 
       const getAttr = (name) => {
         const regex = new RegExp(`${name}="([^"]*)"`);
@@ -174,14 +250,23 @@ async function getElementAtCoordinates(deviceId, x, y) {
       const className = getAttr('class') || 'android.view.View';
 
       let xpath = '';
+      let primaryType = 'xpath';
+      let primaryValue = '';
       if (resourceId) {
+        primaryType = 'resource-id';
+        primaryValue = resourceId;
         xpath = `//${className}[@resource-id="${resourceId}"]`;
-      } else if (text) {
-        xpath = `//${className}[@text="${text}"]`;
       } else if (contentDescription) {
+        primaryType = 'accessibility-id';
+        primaryValue = contentDescription;
         xpath = `//${className}[@content-desc="${contentDescription}"]`;
+      } else if (text) {
+        primaryType = 'text';
+        primaryValue = text;
+        xpath = `//${className}[@text="${text}"]`;
       } else {
-        xpath = `//${className}`;
+        xpath = `//${className}[@bounds="${bestBounds}"]`;
+        primaryValue = xpath;
       }
 
       return {
@@ -189,7 +274,12 @@ async function getElementAtCoordinates(deviceId, x, y) {
         accessibilityId: contentDescription || resourceId || undefined,
         contentDescription,
         text,
-        xpath
+        className,
+        bounds: bestBounds,
+        clickable: /clickable="true"/.test(bestNodeStr),
+        xpath,
+        primaryType,
+        primaryValue
       };
     }
   } catch (err) {
@@ -266,6 +356,68 @@ function getJson(urlStr) {
   });
 }
 
+// Text typed with `adb shell input text` goes to whichever field holds focus, so
+// the focused node is the element the step should reference.
+async function getFocusedElement(deviceId, preloadedXml) {
+  try {
+    const xmlContent = preloadedXml || cachedXmlHierarchy.xml || await dumpUiHierarchy(deviceId);
+    if (!xmlContent) return null;
+
+    const nodeRegex = /<node\s+([^>]*?)\/?>/g;
+    let match;
+    while ((match = nodeRegex.exec(xmlContent)) !== null) {
+      const attrs = match[1];
+      if (!/focused="true"/.test(attrs)) continue;
+      const boundsMatch = attrs.match(/bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"/);
+      if (!boundsMatch) continue;
+      const centerX = Math.round((Number(boundsMatch[1]) + Number(boundsMatch[3])) / 2);
+      const centerY = Math.round((Number(boundsMatch[2]) + Number(boundsMatch[4])) / 2);
+      return await getElementAtCoordinates(deviceId, centerX, centerY, xmlContent);
+    }
+  } catch (err) {
+    console.error('Failed to resolve the focused element:', err.message);
+  }
+  return null;
+}
+
+// Appium code that drives the element itself rather than raw screen coordinates
+function buildAppiumScript(action, locatorAttr, params) {
+  const target = locatorAttr && locatorAttr.primaryValue
+    ? (locatorAttr.primaryType === 'resource-id'
+        ? `driver.elementById(${JSON.stringify(locatorAttr.primaryValue)})`
+        : locatorAttr.primaryType === 'accessibility-id'
+          ? `driver.elementByAccessibilityId(${JSON.stringify(locatorAttr.primaryValue)})`
+          : `driver.elementByXPath(${JSON.stringify(locatorAttr.xpath || locatorAttr.primaryValue)})`)
+    : '';
+
+  if (action === 'fill' || action === 'type') {
+    return target
+      ? `const el = await ${target};\nawait el.clear();\nawait el.sendKeys(${JSON.stringify(params.text || '')});`
+      : `await driver.keys(${JSON.stringify(params.text || '')});`;
+  }
+  if (action === 'press') {
+    const keyName = params.key || 'Back';
+    return `// Press ${keyName}\nawait driver.pressKeyCode(${keyName === 'Home' ? 3 : keyName === 'Recents' ? 187 : keyName === 'Enter' ? 66 : 4});`;
+  }
+  if (action === 'swipe' || action === 'scroll') {
+    const anchor = target ? `const el = await ${target};\n` : '';
+    return `${anchor}await driver.touchPerform([\n  { action: 'press', options: { x: ${params.x1}, y: ${params.y1} } },\n  { action: 'wait', options: { ms: ${params.duration || 300} } },\n  { action: 'moveTo', options: { x: ${params.x2}, y: ${params.y2} } },\n  { action: 'release' }\n]);`;
+  }
+  if (action === 'long_press') {
+    return target
+      ? `const el = await ${target};\nawait driver.touchPerform([{ action: 'longPress', options: { element: el.value } }, { action: 'release' }]);`
+      : `await driver.touchPerform([{ action: 'longPress', options: { x: ${params.x}, y: ${params.y} } }, { action: 'release' }]);`;
+  }
+  if (action === 'double_tap') {
+    return target
+      ? `const el = await ${target};\nawait el.click();\nawait el.click();`
+      : `await driver.touchPerform([{ action: 'tap', options: { x: ${params.x}, y: ${params.y}, count: 2 } }]);`;
+  }
+  return target
+    ? `await (await ${target}).click();`
+    : `await driver.touchPerform([{ action: 'tap', options: { x: ${params.x}, y: ${params.y} } }]);`;
+}
+
 function getAndroidElementName(locatorAttr) {
   if (!locatorAttr) return '';
   const semanticName = locatorAttr.text || locatorAttr.contentDescription || locatorAttr.accessibilityId;
@@ -281,6 +433,7 @@ function getAndroidElementName(locatorAttr) {
 let agentRunning = true;
 let activeRecordingSession = null;
 let lastUploadedFrameTime = 0;
+let lastUploadedHierarchyTime = 0;
 
 async function startHeartbeat() {
   while (agentRunning) {
@@ -330,6 +483,20 @@ async function startStreamingAndCommandPolling() {
         }
       }
 
+      // 1b. Stream the real UIAutomator hierarchy so the recorder can resolve
+      // taps to actual app nodes instead of raw screen coordinates.
+      if (now - lastUploadedHierarchyTime >= 1500) {
+        lastUploadedHierarchyTime = now;
+        const xml = await dumpUiHierarchy(deviceId).catch(() => '');
+        if (xml) {
+          await postJson(`${serverUrl}/api/device-agent/upload-hierarchy`, {
+            email: userEmail,
+            xml,
+            deviceId
+          }).catch(() => {});
+        }
+      }
+
       // 2. Poll for pending interactive user commands from AutomatiQA UI
       const actionRes = await getJson(`${serverUrl}/api/device-agent/pending-actions?email=${encodeURIComponent(userEmail)}`);
       if (actionRes && actionRes.actions && actionRes.actions.length > 0) {
@@ -340,7 +507,6 @@ async function startStreamingAndCommandPolling() {
 
           let cmd = '';
           let locatorAttr = null;
-          let locatorPromise = null;
 
           if (action === 'click' || action === 'tap' || action === 'double_tap' || action === 'long_press') {
             cmd = `adb -s ${actionDeviceId} shell input tap ${params.x} ${params.y}`;
@@ -349,15 +515,23 @@ async function startStreamingAndCommandPolling() {
             } else if (action === 'long_press') {
               cmd = `adb -s ${actionDeviceId} shell input swipe ${params.x} ${params.y} ${params.x} ${params.y} 1000`;
             }
-            // Do not block the actual tap on a slow UIAutomator hierarchy dump.
-            locatorPromise = getElementAtCoordinates(actionDeviceId, params.x, params.y);
+            // Resolve against the screen as it is BEFORE the gesture. Dumping
+            // afterwards would describe whatever screen the tap navigated to.
+            const preXml = await getHierarchyBeforeGesture(actionDeviceId);
+            locatorAttr = await getElementAtCoordinates(actionDeviceId, params.x, params.y, preXml).catch(() => null);
           } else if (action === 'type' || action === 'fill') {
             const escaped = (params.text || '').replace(/ /g, '%s');
             cmd = `adb -s ${actionDeviceId} shell input text "${escaped}"`;
+            // Text lands in the focused field, so that node identifies the step
+            const preXml = await getHierarchyBeforeGesture(actionDeviceId);
+            locatorAttr = await getFocusedElement(actionDeviceId, preXml).catch(() => null);
           } else if (action === 'clear') {
             cmd = `adb -s ${actionDeviceId} shell input keyevent 67`.repeat(25).replace(/adb/g, '&& adb').substring(3);
           } else if (action === 'swipe' || action === 'scroll') {
             cmd = `adb -s ${actionDeviceId} shell input swipe ${params.x1} ${params.y1} ${params.x2} ${params.y2} ${params.duration || 300}`;
+            // Anchor the gesture to the element it started on
+            const preXml = await getHierarchyBeforeGesture(actionDeviceId);
+            locatorAttr = await getElementAtCoordinates(actionDeviceId, params.x1, params.y1, preXml).catch(() => null);
           } else if (action === 'press') {
             let keycode = 4; // Back default
             if (params.key === 'Home') keycode = 3;
@@ -379,9 +553,8 @@ async function startStreamingAndCommandPolling() {
           if (cmd) {
             await runCmd(cmd);
 
-            if (locatorPromise) {
-              locatorAttr = await locatorPromise.catch(() => null);
-            }
+            // The gesture changed the screen, so the cached hierarchy is stale
+            cachedXmlHierarchy = { time: 0, xml: cachedXmlHierarchy.xml };
 
             await postJson(`${serverUrl}/api/device-agent/upload-logs`, {
               email: userEmail,
@@ -400,20 +573,22 @@ async function startStreamingAndCommandPolling() {
                 elementName: labelName,
                 locator: {
                   primary: {
-                    type: locatorAttr?.accessibilityId ? 'accessibility-id' : locatorAttr?.resourceId ? 'resource-id' : 'xpath',
-                    value: locatorAttr?.accessibilityId || locatorAttr?.resourceId || locatorAttr?.xpath || `//android.view.View`,
-                    playwright: (action === 'click' || action === 'tap')
-                      ? `await driver.touchPerform([{ action: 'tap', options: { x: ${params.x}, y: ${params.y} } }]);`
-                      : action === 'fill' || action === 'type'
-                        ? `await driver.keys("${params.text || ''}");`
-                        : `await driver.pressKeyCode(4);`
+                    type: locatorAttr?.primaryType || 'xpath',
+                    value: locatorAttr?.primaryValue || locatorAttr?.xpath || `//android.view.View`,
+                    playwright: buildAppiumScript(action, locatorAttr, params),
+                    bounds: locatorAttr?.bounds
                   },
                   alternatives: [
+                    locatorAttr?.text ? { type: 'text', value: locatorAttr.text } : null,
                     locatorAttr?.accessibilityId ? { type: 'accessibility-id', value: locatorAttr.accessibilityId } : null,
                     locatorAttr?.resourceId ? { type: 'resource-id', value: locatorAttr.resourceId } : null,
                     locatorAttr?.xpath ? { type: 'xpath', value: locatorAttr.xpath } : null
                   ].filter(Boolean)
                 },
+                // Records whether this step points at a real node from the app's
+                // UI hierarchy, or only at screen coordinates
+                resolvedFromHierarchy: !!locatorAttr,
+                className: locatorAttr?.className,
                 screen: "ActiveScreen",
                 platform: 'mobile',
                 x: params.x,

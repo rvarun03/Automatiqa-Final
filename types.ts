@@ -491,6 +491,18 @@ export interface RecordedStep {
   scrollX?: number;
   scrollY?: number;
   keyCombo?: string;
+  /** Android bounds string of the resolved node, e.g. "[90,810][990,930]". */
+  bounds?: string;
+  /** Class of the resolved Android node, e.g. "android.widget.Button". */
+  className?: string;
+  /**
+   * True when this step targets a node that was found in the app's live
+   * UIAutomator hierarchy. False/absent means it fell back to screen
+   * coordinates, which will not survive a different device or resolution.
+   */
+  resolvedFromHierarchy?: boolean;
+  /** Recorder bookkeeping: when this interaction was last seen repeated. */
+  lastSeenAt?: number;
 }
 
 export interface RecordedFlow {

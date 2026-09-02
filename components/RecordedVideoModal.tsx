@@ -20,7 +20,8 @@ import {
   Loader2,
   ChevronRight,
   ShieldCheck,
-  Smartphone
+  Smartphone,
+  Camera
 } from 'lucide-react';
 import { RecordedFlow, RecordedStep } from '../types';
 import { toast } from 'sonner';
@@ -640,6 +641,16 @@ export const RecordedVideoModal: React.FC<RecordedVideoModalProps> = ({
     return !!(flow?.screenshots?.length || (screenshots && Object.keys(screenshots).length > 0) || flow?.steps?.some(s => s.screenshot));
   }, [flow, screenshots]);
 
+  // The real .webm Playwright recorded for this session, when the flow has one.
+  // Everything else in this viewer is a reconstruction drawn from screenshots and
+  // step metadata; this is the actual footage.
+  const sessionVideoUrl = flow?.videoUrl || null;
+  const [showSessionVideo, setShowSessionVideo] = useState<boolean>(!!sessionVideoUrl);
+
+  useEffect(() => {
+    setShowSessionVideo(!!sessionVideoUrl);
+  }, [sessionVideoUrl]);
+
   const [viewMode, setViewMode] = useState<'screenshot' | 'interactive' | 'iframe'>(() => {
     if (flow?.platform === 'mobile') {
       return (flow?.screenshots?.length || (screenshots && Object.keys(screenshots).length > 0)) ? 'screenshot' : 'interactive';
@@ -850,6 +861,30 @@ export const RecordedVideoModal: React.FC<RecordedVideoModalProps> = ({
       return;
     }
 
+    // Prefer the genuine session recording over the canvas reconstruction, so a
+    // downloaded .webm shows what really happened in the browser.
+    if (sessionVideoUrl) {
+      try {
+        const res = await fetch(sessionVideoUrl);
+        if (!res.ok) throw new Error(`Server returned ${res.status}`);
+        const blob = await res.blob();
+        const href = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = href;
+        a.download = `${(flow.name || 'recording').replace(/[^a-z0-9]+/gi, '_')}_session.webm`;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        URL.revokeObjectURL(href);
+        toast.success('Session recording downloaded');
+        if (onDownloadVideo) onDownloadVideo(flow);
+        return;
+      } catch (err: any) {
+        console.warn('Could not download the session video, falling back to the rendered timeline:', err);
+        toast.info('Session video unavailable; exporting the step timeline instead.');
+      }
+    }
+
     setIsGeneratingDownload(true);
     setDownloadProgress(10);
     try {
@@ -865,11 +900,17 @@ export const RecordedVideoModal: React.FC<RecordedVideoModalProps> = ({
     }
   };
 
-  const activeScreenshot = currentStep?.screenshot || 
-    (currentStep ? screenshots[currentStep.id] : undefined) || 
-    (flow?.screenshots && flow.screenshots[currentStepIndex]) || 
-    Object.values(screenshots)[currentStepIndex] || 
-    Object.values(screenshots).slice(-1)[0];
+  // Only ever show an image that belongs to this step. Falling back to "any
+  // screenshot we happen to have" renders the login page under a /dashboard URL
+  // and makes the viewer look like the flow never progressed.
+  const activeScreenshot = currentStep?.screenshot ||
+    (currentStep ? screenshots[currentStep.id] : undefined) ||
+    (flow?.screenshots && flow.screenshots[currentStepIndex]) ||
+    Object.values(screenshots)[currentStepIndex];
+
+  // True when this step has no captured image, so the frame can say so instead of
+  // silently showing a different page.
+  const isScreenshotMissingForStep = !activeScreenshot;
 
   if (!isOpen || !flow) return null;
 
@@ -959,7 +1000,40 @@ export const RecordedVideoModal: React.FC<RecordedVideoModalProps> = ({
             <div className="flex-1 bg-slate-900 p-6 flex flex-col justify-between overflow-y-auto custom-scrollbar border-r border-slate-800">
               <div className="w-full h-full bg-slate-950 rounded-2xl border border-slate-800 overflow-hidden flex flex-col relative min-h-[380px] shadow-2xl">
                 
-                {flow.platform === 'mobile' ? (
+                {showSessionVideo && sessionVideoUrl ? (
+                  /* The real session recording. Every other view in this modal is
+                     redrawn from screenshots and step metadata; this is the actual
+                     footage of what happened in the browser. */
+                  <div className="flex-1 flex flex-col bg-black overflow-hidden">
+                    <div className="px-4 py-2.5 bg-slate-950 border-b border-slate-800 flex items-center justify-between gap-2 flex-wrap">
+                      <div className="flex items-center gap-2 min-w-0">
+                        <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse shrink-0" />
+                        <span className="text-[10px] font-black text-emerald-300 uppercase tracking-widest">
+                          Actual Session Recording
+                        </span>
+                        <span className="text-[10px] text-slate-500 truncate">
+                          {flow.steps?.length || 0} actions captured
+                        </span>
+                      </div>
+                      <button
+                        onClick={() => setShowSessionVideo(false)}
+                        className="px-2.5 py-1 rounded border border-slate-700 bg-slate-900 text-slate-300 text-[9px] font-bold uppercase tracking-wider hover:bg-slate-800 transition-all shrink-0"
+                        title="Show the step-by-step reconstruction built from screenshots"
+                      >
+                        Step Timeline View
+                      </button>
+                    </div>
+                    <div className="flex-1 bg-black flex items-center justify-center">
+                      <video
+                        key={sessionVideoUrl}
+                        src={sessionVideoUrl}
+                        controls
+                        autoPlay
+                        className="w-full h-full object-contain"
+                      />
+                    </div>
+                  </div>
+                ) : flow.platform === 'mobile' ? (
                   /* Mobile Emulator Stage */
                   <div className="flex-1 bg-slate-900 relative flex items-center justify-center p-3 overflow-hidden select-none">
                     <MobilePlaybackEmulator
@@ -995,6 +1069,15 @@ export const RecordedVideoModal: React.FC<RecordedVideoModalProps> = ({
                       </div>
 
                       <div className="flex items-center gap-2 text-[10px] font-black text-slate-400 uppercase tracking-widest shrink-0">
+                        {sessionVideoUrl && (
+                          <button
+                            onClick={() => setShowSessionVideo(true)}
+                            className="px-2.5 py-1 rounded border border-emerald-500/40 bg-emerald-500/10 text-emerald-300 text-[9px] font-bold uppercase tracking-wider hover:bg-emerald-500/20 transition-all"
+                            title="Play the real recording of this session"
+                          >
+                            ▶ Session Video
+                          </button>
+                        )}
                         {/* Mode switcher: Step Screenshot vs Live Application Frame */}
                         <div className="flex bg-slate-900 p-0.5 rounded-lg border border-slate-800">
                           <button
@@ -1044,6 +1127,21 @@ export const RecordedVideoModal: React.FC<RecordedVideoModalProps> = ({
                         className="w-full h-full object-fill object-top pointer-events-none select-none"
                         referrerPolicy="no-referrer"
                       />
+                    ) : viewMode === 'screenshot' && isScreenshotMissingForStep ? (
+                      /* Say plainly that this step has no captured image rather
+                         than showing a different page under this step's URL. */
+                      <div className="w-full h-full flex flex-col items-center justify-center gap-3 bg-slate-900 text-center px-8 select-none">
+                        <Camera size={28} className="text-slate-600" />
+                        <p className="text-[12px] font-bold text-slate-400">
+                          No screenshot was captured for step {currentStepIndex + 1}
+                        </p>
+                        <p className="text-[11px] text-slate-500 max-w-sm leading-relaxed">
+                          The recorded page was <span className="font-mono text-slate-400">{currentActiveUrl || 'unknown'}</span>.
+                          {sessionVideoUrl
+                            ? ' Use "Session Video" above to watch what actually happened.'
+                            : ' Re-record this flow to capture the session as video.'}
+                        </p>
+                      </div>
                     ) : (
                       <iframe
                         key={`video-modal-frame-${currentActiveUrl}-${useProxy}`}

@@ -611,9 +611,19 @@ try {
   console.warn("Admin Firestore initialization warning:", adminErr);
 }
 
+// Where Playwright writes the .webm of each recording session
+const RECORDING_VIDEO_ROOT = path.join(process.cwd(), 'recordings', 'videos');
+try {
+  fs.mkdirSync(RECORDING_VIDEO_ROOT, { recursive: true });
+} catch (e) {
+  console.warn('Could not create the recording video directory:', e);
+}
+
 interface RecordingSession {
   id: string;
   name: string;
+  videoPath?: string;
+  videoUrl?: string;
   platform: string;
   url: string;
   initialUrl: string;
@@ -1369,8 +1379,14 @@ async function startServer() {
         sendCapturedStep("navigate", document.body, { value: currentCapturedUrl, url: currentCapturedUrl });
       }
 
-      // SPA Navigation & URL History Hook
+      // SPA Navigation & URL History Hook.
+      // This script is injected into every frame, and ad/analytics iframes
+      // (doubleclick, adnxs, tag managers) change their own location constantly.
+      // Only the top document defines the page the user is on; recording a
+      // subframe's URL as a navigation makes playback drive the whole browser to
+      // an advertising frame instead of the site under test.
       const checkAndRecordNav = () => {
+        if (isIframe) return;
         if (window.location.href !== currentCapturedUrl && window.location.href !== 'about:blank') {
           currentCapturedUrl = window.location.href;
           sendCapturedStep("navigate", document.body, { value: currentCapturedUrl, url: currentCapturedUrl });
@@ -1634,6 +1650,7 @@ async function startServer() {
       fullPath.startsWith('/api/record-event') ||
       fullPath.startsWith('/api/validate-url') ||
       fullPath.startsWith('/api/capture-url-ui') ||
+      fullPath.startsWith('/api/recording-video/') ||
       fullPath.startsWith('/api/run-playback') ||
       fullPath.startsWith('/api/health') ||
       fullPath.startsWith('/api/gemini/') ||
@@ -3216,8 +3233,13 @@ async function startServer() {
                 }
               }, true);
 
-              // Navigation detection periodic check
+              // Navigation detection periodic check.
+              // Only the top document defines the page under test: ad and
+              // analytics iframes retarget themselves constantly, and recording
+              // those as navigations sends playback to an advertising frame.
+              const isSubFrame = window !== window.top;
               const checkUrl = () => {
+                if (isSubFrame) return;
                 const actualUrl = currentTargetUrl || getTargetUrl();
                 if (actualUrl && actualUrl !== lastUrl) {
                   lastUrl = actualUrl;
@@ -3929,6 +3951,12 @@ async function startServer() {
             headless: requestedLaunchMode === 'proxy'
           });
 
+          // Record the session as real video. Playwright writes a .webm per page
+          // directly, so playback can show what actually happened instead of
+          // re-executing the actions against a site that may have changed.
+          const sessionVideoDir = path.join(RECORDING_VIDEO_ROOT, sessionId);
+          fs.mkdirSync(sessionVideoDir, { recursive: true });
+
           const context = await browser.newContext({
             userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
             viewport: { width: 1280, height: 800 },
@@ -3937,7 +3965,8 @@ async function startServer() {
             isMobile: false,
             locale: 'en-US',
             ignoreHTTPSErrors: true,
-            storageState: null
+            storageState: null,
+            recordVideo: { dir: sessionVideoDir, size: { width: 1280, height: 800 } }
           });
 
           // Anti-Bot Stealth Init Script
@@ -4546,10 +4575,47 @@ async function startServer() {
     const session = sessions.get(sessionId);
 
     if (session) {
+      // Finalise the session video. Playwright only flushes the .webm when the
+      // context closes, so collect the paths first, then close, then verify the
+      // files landed on disk.
+      let videoUrl: string | null = null;
+      const pendingVideos: Array<Promise<string | null>> = [];
+      if (session.context) {
+        for (const p of session.context.pages()) {
+          const vid = p.video();
+          if (vid) pendingVideos.push(vid.path().catch(() => null));
+        }
+      }
+
       // Close Playwright browser if exists
       if (session.browser) {
         console.log(`Closing Playwright browser for session ${sessionId}`);
+        // The context must close before the browser for the video to be written
+        await session.context?.close().catch(() => {});
         await session.browser.close().catch(err => console.error("Failed to close browser:", err));
+      }
+
+      try {
+        const paths = (await Promise.all(pendingVideos)).filter(Boolean) as string[];
+        // The main page's recording is the first one the context opened
+        const primary = paths.find(p => p && fs.existsSync(p)) ||
+          (() => {
+            const dir = path.join(RECORDING_VIDEO_ROOT, sessionId);
+            if (!fs.existsSync(dir)) return '';
+            const files = fs.readdirSync(dir).filter(f => f.endsWith('.webm'));
+            return files.length ? path.join(dir, files[0]) : '';
+          })();
+
+        if (primary && fs.existsSync(primary)) {
+          const size = fs.statSync(primary).size;
+          session.videoPath = primary;
+          videoUrl = `/api/recording-video/${sessionId}/${path.basename(primary)}`;
+          console.log(`[Recording Video] Saved ${(size / 1024).toFixed(0)} KB for session ${sessionId} -> ${videoUrl}`);
+        } else {
+          console.warn(`[Recording Video] No video file was produced for session ${sessionId}.`);
+        }
+      } catch (videoErr) {
+        console.warn('[Recording Video] Could not finalise the session video:', videoErr);
       }
 
       // Notify extension to stop recording via raw WebSocket
@@ -4562,12 +4628,62 @@ async function startServer() {
       const steps = session.steps;
       sessions.delete(sessionId);
       console.log(`Stopped recording session: ${sessionId}`);
-      res.json({ steps });
+      res.json({ steps, videoUrl });
     } else {
       // If session not found, it might have been already stopped or server restarted.
       // We return success with empty steps to avoid confusing the UI/User.
       console.warn(`Stop recording requested for non-existent session: ${sessionId}`);
       res.json({ steps: [], warning: "Session not found" });
+    }
+  });
+
+  // Serve a recorded session video. Range requests are honoured so the player
+  // can seek and scrub rather than having to download the whole file first.
+  app.get("/api/recording-video/:sessionId/:file", (req, res) => {
+    try {
+      const { sessionId, file } = req.params;
+      // Both segments come from the URL, so keep them inside the video root
+      // Playwright names its recordings "page@<hash>.webm"
+      if (!/^[A-Za-z0-9_-]+$/.test(sessionId) || !/^[A-Za-z0-9_@.-]+\.webm$/.test(file) || file.includes('..')) {
+        return res.status(400).json({ error: 'Invalid video reference.' });
+      }
+      const filePath = path.join(RECORDING_VIDEO_ROOT, sessionId, file);
+      const resolved = path.resolve(filePath);
+      if (!resolved.startsWith(path.resolve(RECORDING_VIDEO_ROOT))) {
+        return res.status(400).json({ error: 'Invalid video path.' });
+      }
+      if (!fs.existsSync(resolved)) {
+        return res.status(404).json({ error: 'Recording video not found. It may have been cleared.' });
+      }
+
+      const stat = fs.statSync(resolved);
+      const range = req.headers.range;
+      if (range) {
+        const match = /bytes=(\d*)-(\d*)/.exec(range);
+        const start = match && match[1] ? parseInt(match[1], 10) : 0;
+        const end = match && match[2] ? parseInt(match[2], 10) : stat.size - 1;
+        if (start >= stat.size || end >= stat.size || start > end) {
+          res.writeHead(416, { 'Content-Range': `bytes */${stat.size}` });
+          return res.end();
+        }
+        res.writeHead(206, {
+          'Content-Range': `bytes ${start}-${end}/${stat.size}`,
+          'Accept-Ranges': 'bytes',
+          'Content-Length': end - start + 1,
+          'Content-Type': 'video/webm'
+        });
+        return fs.createReadStream(resolved, { start, end }).pipe(res);
+      }
+
+      res.writeHead(200, {
+        'Content-Length': stat.size,
+        'Content-Type': 'video/webm',
+        'Accept-Ranges': 'bytes'
+      });
+      return fs.createReadStream(resolved).pipe(res);
+    } catch (err: any) {
+      console.error('[Recording Video] Serve error:', err);
+      return res.status(500).json({ error: err?.message || 'Could not serve the recording video.' });
     }
   });
 
@@ -5255,9 +5371,27 @@ async function startServer() {
                 return el.tagName === 'INPUT' && ((el as HTMLInputElement).type === 'radio' || (el as HTMLInputElement).type === 'checkbox');
               }).catch(() => false);
 
+              // A click that submits a login form or follows a link starts a
+              // navigation. That tears down the execution context Playwright is
+              // mid-way through checking, so the call can throw even though the
+              // click landed. Track the URL to tell a genuine failure apart from
+              // a successful click that navigated.
+              const urlBeforeClick = page.url();
+              const clickNavigated = async () => {
+                if (page.isClosed()) return true;
+                if (page.url() !== urlBeforeClick) return true;
+                // The navigation may still be in flight when the click throws
+                try {
+                  await page.waitForURL(u => u.toString() !== urlBeforeClick, { timeout: 2500 });
+                  return true;
+                } catch (e) {
+                  return page.url() !== urlBeforeClick;
+                }
+              };
+
               if (isRadioOrCheckbox) {
                 await loc.check({ timeout: 2000 }).catch(async () => {
-                  await loc.click({ force: true, timeout: 1500 });
+                  await loc.click({ force: true, timeout: 1500 }).catch(() => {});
                 });
                 await loc.evaluate((el: HTMLElement) => {
                   if ('checked' in el) (el as HTMLInputElement).checked = true;
@@ -5266,17 +5400,31 @@ async function startServer() {
                   el.dispatchEvent(new Event('click', { bubbles: true }));
                 }).catch(() => {});
               } else if (action === 'dblclick') {
-                await loc.dblclick({ timeout: 2500 }).catch(async () => {
-                  await loc.dblclick({ force: true, timeout: 1500 });
+                let ok = true;
+                await loc.dblclick({ timeout: 2500, noWaitAfter: true }).catch(async () => {
+                  await loc.dblclick({ force: true, timeout: 1500, noWaitAfter: true }).catch(() => { ok = false; });
                 });
+                if (!ok && !(await clickNavigated())) {
+                  return { success: false, error: `Double click on "${elementName || rawSelector}" did not take effect.` };
+                }
               } else {
-                let clickOptions: any = { timeout: 2500 };
+                // noWaitAfter: the navigation this click starts is awaited by the
+                // playback loop, which knows which page the recording expects.
+                let clickOptions: any = { timeout: 2500, noWaitAfter: true };
                 if (typeof step.offsetX === 'number' && typeof step.offsetY === 'number' && step.offsetX > 0 && step.offsetY > 0) {
                   clickOptions.position = { x: Math.round(step.offsetX), y: Math.round(step.offsetY) };
                 }
+                let ok = true;
                 await loc.click(clickOptions).catch(async () => {
-                  await loc.click({ force: true, timeout: 1500 });
+                  await loc.click({ force: true, timeout: 1500, noWaitAfter: true }).catch(() => { ok = false; });
                 });
+                if (!ok) {
+                  if (await clickNavigated()) {
+                    console.log(`[PLAYBACK] Click on "${elementName || rawSelector}" started a navigation; treating it as performed.`);
+                  } else {
+                    return { success: false, error: `Click on "${elementName || rawSelector}" did not take effect.` };
+                  }
+                }
               }
 
               // Wait for any initiated navigation or async DOM changes to fully load and settle
@@ -5503,34 +5651,95 @@ async function startServer() {
       return domResult;
     }
 
-    // 7. Coordinate-based click / type fallback (if exact coordinates or box are recorded)
+    // 7. Coordinate-based click / type fallback (if exact coordinates or box are
+    // recorded). Clicking a raw pixel position is only meaningful on the page the
+    // coordinates came from: on any other page it hits whatever happens to sit
+    // there. It must therefore never be used to declare a step successful on a
+    // page the step was not recorded on, and it must confirm it actually did
+    // something - otherwise a run reports every step green while nothing at all
+    // was interacted with.
     if (step.coordinates || step.targetBox || (typeof step.x === 'number' && typeof step.y === 'number')) {
-      const vp = page.viewportSize() || { width: 1280, height: 720 };
-      const cxPct = step.coordinates?.x ?? step.x ?? (step.targetBox ? step.targetBox.x + step.targetBox.width / 2 : 50);
-      const cyPct = step.coordinates?.y ?? step.y ?? (step.targetBox ? step.targetBox.y + step.targetBox.height / 2 : 50);
-      const px = Math.round((cxPct / 100) * vp.width);
-      const py = Math.round((cyPct / 100) * vp.height);
-
-      if (px > 0 && py > 0) {
-        console.log(`[Playback Engine] Interacting via coordinate click/type fallback at (${px}px, ${py}px) [${cxPct}%, ${cyPct}%]`);
-        await page.mouse.click(px, py).catch(() => {});
-        await page.waitForTimeout(150);
-
-        if (action === 'fill' || action === 'type') {
-          const valToEnter = valueToFill !== undefined ? String(valueToFill) : '';
-          try {
-            await page.keyboard.press('Control+A').catch(() => {});
-            await page.keyboard.press('Backspace').catch(() => {});
-            await page.keyboard.type(valToEnter, { delay: 30 }).catch(() => {});
-          } catch (e) {}
+      const recordedStepUrl = typeof step.url === 'string' ? step.url : '';
+      const livePageUrl = page.url();
+      let sameRecordedPage = true;
+      if (recordedStepUrl && /^https?:\/\//i.test(recordedStepUrl)) {
+        try {
+          const a = new URL(livePageUrl);
+          const b = new URL(recordedStepUrl);
+          const pa = a.pathname.replace(/\/+$/, '') || '/';
+          const pb = b.pathname.replace(/\/+$/, '') || '/';
+          sameRecordedPage = a.origin === b.origin && (pa === pb || pa.endsWith(pb) || pb.endsWith(pa));
+        } catch (e) {
+          sameRecordedPage = true;
         }
+      }
 
-        await page.waitForTimeout(250);
-        return {
-          success: true,
-          coordinates: { x: cxPct, y: cyPct },
-          targetBox: step.targetBox || { x: cxPct - 8, y: cyPct - 3, width: 16, height: 6 }
-        };
+      if (!sameRecordedPage) {
+        console.warn(`[PLAYBACK] Skipping coordinate fallback for "${elementName || rawSelector}": the browser is on "${livePageUrl}" but the coordinates were recorded on "${recordedStepUrl}".`);
+      } else {
+        const vp = page.viewportSize() || { width: 1280, height: 720 };
+        const cxPct = step.coordinates?.x ?? step.x ?? (step.targetBox ? step.targetBox.x + step.targetBox.width / 2 : 50);
+        const cyPct = step.coordinates?.y ?? step.y ?? (step.targetBox ? step.targetBox.y + step.targetBox.height / 2 : 50);
+        const px = Math.round((cxPct / 100) * vp.width);
+        const py = Math.round((cyPct / 100) * vp.height);
+
+        if (px > 0 && py > 0) {
+          // Refuse to "click" empty space: confirm an actual element sits there.
+          const hitTarget = await page.evaluate(({ x, y }) => {
+            const el = document.elementFromPoint(x, y) as HTMLElement | null;
+            if (!el) return null;
+            const tag = (el.tagName || '').toUpperCase();
+            if (tag === 'HTML' || tag === 'BODY') return null;
+            return {
+              tag,
+              editable: tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || !!(el as any).isContentEditable
+            };
+          }, { x: px, y: py }).catch(() => null);
+
+          if (!hitTarget) {
+            console.warn(`[PLAYBACK] Skipping coordinate fallback for "${elementName || rawSelector}": nothing interactive at (${px}px, ${py}px) on ${livePageUrl}.`);
+          } else {
+            console.log(`[Playback Engine] Interacting via coordinate click/type fallback at (${px}px, ${py}px) [${cxPct}%, ${cyPct}%] on <${hitTarget.tag}>`);
+            await page.mouse.click(px, py).catch(() => {});
+            await page.waitForTimeout(150);
+
+            if (action === 'fill' || action === 'type') {
+              const valToEnter = valueToFill !== undefined ? String(valueToFill) : '';
+              if (!hitTarget.editable) {
+                console.warn(`[PLAYBACK] Coordinate fallback cannot type into <${hitTarget.tag}> for "${elementName || rawSelector}".`);
+                return {
+                  success: false,
+                  error: `Target field "${elementName || rawSelector || 'recorded action'}" was not found; the recorded position holds a <${hitTarget.tag}>, not an input.`
+                };
+              }
+              try {
+                await page.keyboard.press('Control+A').catch(() => {});
+                await page.keyboard.press('Backspace').catch(() => {});
+                await page.keyboard.type(valToEnter, { delay: 30 }).catch(() => {});
+              } catch (e) {}
+
+              // Confirm the text actually landed somewhere
+              const typed = await page.evaluate(() => {
+                const el = document.activeElement as any;
+                if (!el) return '';
+                return typeof el.value === 'string' ? el.value : (el.textContent || '');
+              }).catch(() => '');
+              if (valToEnter && !String(typed).includes(valToEnter)) {
+                return {
+                  success: false,
+                  error: `Typing "${valToEnter}" into "${elementName || rawSelector}" did not take effect at the recorded position.`
+                };
+              }
+            }
+
+            await page.waitForTimeout(250);
+            return {
+              success: true,
+              coordinates: { x: cxPct, y: cyPct },
+              targetBox: step.targetBox || { x: cxPct - 8, y: cyPct - 3, width: 16, height: 6 }
+            };
+          }
+        }
       }
     }
 
@@ -5608,22 +5817,123 @@ async function startServer() {
         ignoreHTTPSErrors: true
       });
 
-      const page = await context.newPage();
-      page.setDefaultTimeout(12000);
+      const firstPage = await context.newPage();
+      firstPage.setDefaultTimeout(12000);
 
       const redirectLog: string[] = [];
-      page.on('response', (response) => {
-        const status = response.status();
-        if (status >= 300 && status < 400) {
-          const loc = response.headers()['location'];
-          if (loc) {
-            redirectLog.push(`${response.url()} ➔ ${loc}`);
-            console.log(`[Playback Engine] Redirect: ${response.url()} -> ${loc}`);
+
+      // The recorded flow may move to a new tab/window (login pop-ups, OAuth
+      // consent screens, target="_blank" links). Playback must follow it instead
+      // of continuing to drive the page that opened it.
+      let activePage: Page = firstPage;
+
+      const attachPageListeners = (p: Page) => {
+        p.on('response', (response) => {
+          const status = response.status();
+          if (status >= 300 && status < 400) {
+            const loc = response.headers()['location'];
+            if (loc) {
+              redirectLog.push(`${response.url()} ➔ ${loc}`);
+              console.log(`[PLAYBACK] Redirect: ${response.url()} -> ${loc}`);
+            }
           }
+        });
+        p.on('framenavigated', (frame) => {
+          if (frame === p.mainFrame() && p === activePage) {
+            console.log(`[PLAYBACK] Navigation detected -> ${frame.url()}`);
+          }
+        });
+      };
+
+      attachPageListeners(firstPage);
+
+      context.on('page', async (newPage) => {
+        attachPageListeners(newPage);
+        newPage.setDefaultTimeout(12000);
+        try {
+          await newPage.waitForLoadState('domcontentloaded', { timeout: 8000 });
+        } catch (e) {}
+        if (!newPage.isClosed()) {
+          console.log(`[PLAYBACK] New tab/window adopted as the active page: ${newPage.url()}`);
+          activePage = newPage;
         }
       });
 
+      // Always drive the newest page that is still open; if the active one was
+      // closed (a popup finishing its handshake), fall back to the last survivor.
+      const getActivePage = (): Page => {
+        if (activePage && !activePage.isClosed()) return activePage;
+        const open = context!.pages().filter(p => !p.isClosed());
+        activePage = open.length ? open[open.length - 1] : firstPage;
+        return activePage;
+      };
+
+      // Same page for playback purposes: origin plus path, ignoring query and
+      // hash. Auth flows routinely append one-time tokens that never match the
+      // recorded URL, and forcing a reload over them destroys the session.
+      const isSamePageContext = (a: string, b: string): boolean => {
+        try {
+          const ua = new URL(a);
+          const ub = new URL(b);
+          if (ua.origin !== ub.origin) return false;
+          const pa = ua.pathname.replace(/\/+$/, '') || '/';
+          const pb = ub.pathname.replace(/\/+$/, '') || '/';
+          return pa === pb || pa.endsWith(pb) || pb.endsWith(pa);
+        } catch (e) {
+          return false;
+        }
+      };
+
+      /**
+       * Give the application a chance to reach the page the step was recorded on
+       * by itself - a login redirect, a redirect chain, or an SPA route change.
+       * Playwright's waitForURL resolves on same-document (pushState/replaceState)
+       * transitions too, so this covers SPA routing without a reload.
+       * Returns true when the expected page was reached.
+       */
+      const waitForRecordedPage = async (p: Page, expectedUrl: string, timeoutMs: number): Promise<boolean> => {
+        if (isSamePageContext(p.url(), expectedUrl)) return true;
+        console.log(`[PLAYBACK] Waiting for page state... expected "${expectedUrl}", currently "${p.url()}"`);
+        try {
+          await p.waitForURL(u => isSamePageContext(u.toString(), expectedUrl), { timeout: timeoutMs });
+          await ensurePageFullyReady(p, 8000);
+          console.log(`[PLAYBACK] Reached expected page: ${p.url()}`);
+          return true;
+        } catch (e) {
+          return isSamePageContext(p.url(), expectedUrl);
+        }
+      };
+
       const results: any[] = [];
+
+      const originOf = (u?: string): string => {
+        try {
+          return u ? new URL(u).origin : '';
+        } catch (e) {
+          return '';
+        }
+      };
+
+      /**
+       * Older recordings can contain "navigations" that were really third-party
+       * iframes (ad and analytics frames) retargeting themselves. Following one
+       * drives the whole browser into that frame's document and every later step
+       * runs on the wrong page.
+       *
+       * A genuine cross-origin navigation - an SSO or payment hand-off - is
+       * always followed by interactions on that same origin. A frame that merely
+       * refreshed itself never is. No domain list, just the recording's own
+       * evidence.
+       */
+      const originIsInteractedWith = (origin: string, fromIndex: number): boolean => {
+        if (!origin) return false;
+        for (let j = fromIndex; j < steps.length; j++) {
+          const s = steps[j];
+          if (!s || s.skipped || s.action === 'navigate') continue;
+          if (originOf(resolveFullStepUrl(s.url, '') || s.url) === origin) return true;
+        }
+        return false;
+      };
 
       const resolveFullStepUrl = (rawStepUrl?: string, base: string = ''): string | null => {
         if (!rawStepUrl || typeof rawStepUrl !== 'string') return null;
@@ -5684,9 +5994,10 @@ async function startServer() {
       let currentUrl = requestedInitialUrl;
 
       const safeNavigatePage = async (targetNav: string) => {
+        const page = getActivePage();
         if (!targetNav) return page.url() || currentUrl;
         if (isMobileAppTarget(targetNav)) throw new Error('Web playback cannot substitute a mobile mock target.');
-        
+
         let cleanNav = unwrapProxyUrl(targetNav).trim();
         if (!cleanNav || cleanNav === 'Page' || cleanNav === 'MainPage' || cleanNav === 'TargetPage' || cleanNav === 'about:blank') {
           return page.url() || currentUrl;
@@ -5735,12 +6046,21 @@ async function startServer() {
 
       // Notify client immediately that target page and browser session are fully ready
       sendEvent('session_ready', {
-        initialUrl: page.url() || currentUrl,
-        pageTitle: await page.title().catch(() => '')
+        initialUrl: getActivePage().url() || currentUrl,
+        pageTitle: await getActivePage().title().catch(() => '')
       });
+
+      // A run where step after step fails means the page is no longer what the
+      // recording describes; there is nothing to learn from grinding through the
+      // remainder on element-lookup timeouts.
+      const MAX_CONSECUTIVE_FAILURES = 3;
+      let consecutiveFailures = 0;
 
       for (let i = 0; i < steps.length; i++) {
         const step = steps[i];
+        // Re-acquire the live page every step: a previous action may have opened
+        // a tab or closed the one we were driving.
+        let page = getActivePage();
         if (step.skipped) {
           const skippedRes = {
             stepId: step.id,
@@ -5771,42 +6091,78 @@ async function startServer() {
           const elementName = step.elementName || '';
           const urlBeforeAction = page.url();
 
-          console.log(`[Playback Engine] Step ${i + 1}/${steps.length}: [${action.toUpperCase()}] Selector: "${selector}" Value: "${value}" Screen/URL: "${step.url || step.screen || ''}"`);
+          console.log(`[PLAYBACK] Step ${i + 1}/${steps.length}\n  Action: ${action}\n  Element: ${elementName || selector || '(none)'}\n  Current URL: ${page.url()}\n  Recorded URL: ${step.url || step.screen || '(none)'}`);
 
           // Ensure page is completely ready and fully loaded before performing step
           await ensurePageFullyReady(page, 10000);
 
           if (action === 'navigate') {
             const targetNav = resolveCandidateNavUrl(step, currentUrl) || resolveFullStepUrl(step.url, currentUrl) || resolveFullStepUrl(value, currentUrl) || step.url || value || currentUrl;
-            if (targetNav) {
-              currentUrl = await safeNavigatePage(targetNav);
+
+            // Skip a navigation into an origin the recording never interacts
+            // with: that is a third-party frame (ads, analytics, pixels) that
+            // retargeted itself while recording, not a page the user visited.
+            const navOrigin = originOf(targetNav);
+            const currentOrigin = originOf(page.url());
+            if (
+              navOrigin &&
+              currentOrigin &&
+              navOrigin !== currentOrigin &&
+              navOrigin !== originOf(requestedInitialUrl) &&
+              !originIsInteractedWith(navOrigin, i + 1)
+            ) {
+              console.log(`[PLAYBACK] Ignoring navigation to "${targetNav}": no recorded step interacts with ${navOrigin}, so it is a third-party frame, not a page visit.`);
+              currentUrl = page.url();
+            } else if (targetNav) {
+              // A recorded navigation is often the *result* of the previous
+              // action (a login redirect, an SPA route change), not a fresh
+              // address-bar visit. Let the application arrive on its own before
+              // forcing a reload, which would drop the session it just
+              // established.
+              const reachedOnItsOwn = /^https?:\/\//i.test(targetNav)
+                ? await waitForRecordedPage(page, targetNav, 8000)
+                : false;
+              if (reachedOnItsOwn) {
+                console.log(`[PLAYBACK] Application navigated here by itself, no reload needed: ${page.url()}`);
+                currentUrl = page.url();
+              } else {
+                currentUrl = await safeNavigatePage(targetNav);
+              }
             }
           } else if (['click', 'dblclick', 'fill', 'type', 'select', 'selectOption', 'check', 'uncheck', 'hover', 'focus', 'clear', 'scroll'].includes(action)) {
-            // Check if step was recorded on a different page and the browser has not navigated there yet
+            // The step was recorded on a particular page. If playback is not
+            // there yet, the application is usually still completing a
+            // transition it started (authentication redirect chain, SPA route
+            // change). Wait for it to arrive rather than forcing a reload:
+            // reloading mid-handshake is what drops the session and lands
+            // playback back on the login page.
             const stepRecordedUrl = resolveFullStepUrl(step.url, currentUrl) || resolveCandidateNavUrl(step, currentUrl);
-            if (stepRecordedUrl && /^https?:\/\//i.test(stepRecordedUrl)) {
-              const currentP = page.url() || '';
-              try {
-                const parsedCurrent = new URL(currentP);
-                const parsedRecorded = new URL(stepRecordedUrl);
-                const isDifferentPage = parsedCurrent.origin !== parsedRecorded.origin || 
-                  (parsedCurrent.pathname !== parsedRecorded.pathname && !parsedCurrent.pathname.endsWith(parsedRecorded.pathname) && !parsedRecorded.pathname.endsWith(parsedCurrent.pathname));
-                if (isDifferentPage) {
-                  console.log(`[Playback Engine] Multi-page sync: Navigating to step recorded page: ${stepRecordedUrl}`);
-                  currentUrl = await safeNavigatePage(stepRecordedUrl);
-                }
-              } catch (e) {}
+            if (stepRecordedUrl && /^https?:\/\//i.test(stepRecordedUrl) && !isSamePageContext(page.url(), stepRecordedUrl)) {
+              const arrived = await waitForRecordedPage(page, stepRecordedUrl, 10000);
+              page = getActivePage();
+              if (!arrived) {
+                console.log(`[PLAYBACK] Still on "${page.url()}" after waiting; will try the element here before reloading.`);
+              }
+              currentUrl = page.url();
             }
 
             let res = await findAndInteractElement(page, step, action, value);
 
-            // If element was not found, attempt URL synchronization as fallback before failing
-            if (!res.success && step.url) {
+            // Only when the element genuinely cannot be found on the live page do
+            // we fall back to loading the recorded URL directly. This keeps
+            // login-free flows working exactly as before, while never pre-empting
+            // an authentication redirect that was still in flight.
+            // If the page moved during this step, the action itself caused a
+            // navigation. Reloading the step's recorded page here would undo it
+            // and send playback back to the login screen.
+            const pageMovedDuringStep = page.url() !== urlBeforeAction;
+            if (!res.success && step.url && !pageMovedDuringStep) {
               const fallbackUrl = resolveFullStepUrl(step.url, currentUrl);
-              if (fallbackUrl && /^https?:\/\//i.test(fallbackUrl) && fallbackUrl !== page.url()) {
-                console.log(`[Playback Engine] Element interaction retry: Synchronizing page to recorded URL: ${fallbackUrl}`);
+              if (fallbackUrl && /^https?:\/\//i.test(fallbackUrl) && !isSamePageContext(page.url(), fallbackUrl)) {
+                console.log(`[PLAYBACK] Element not found on "${page.url()}". Falling back to a direct load of the recorded page: ${fallbackUrl}`);
                 try {
                   currentUrl = await safeNavigatePage(fallbackUrl);
+                  page = getActivePage();
                   res = await findAndInteractElement(page, step, action, value);
                 } catch (syncErr) {}
               }
@@ -5844,17 +6200,43 @@ async function startServer() {
             }
           }
 
-          // A recorded interaction may navigate. Prefer a real URL/load-state
-          // transition; the short wait is only a visual settle, not ordering.
+          // A recorded interaction may start a navigation - a form post, a login
+          // handshake, an SPA route change. Synchronise on where the recording
+          // says we should end up, so a redirect chain
+          // (/login -> /authenticate -> /callback -> /dashboard) is followed to
+          // its stable end instead of being interrupted by the next step.
           if (['click', 'dblclick', 'submit', 'press'].includes(action)) {
-            await page.waitForURL(url => url.toString() !== urlBeforeAction, { timeout: 4000 }).catch(() => {});
+            const nextStep = steps.slice(i + 1).find((s: any) => s && !s.skipped);
+            const expectedNextUrl = nextStep
+              ? (resolveFullStepUrl(nextStep.url, currentUrl) || resolveCandidateNavUrl(nextStep, currentUrl))
+              : null;
+
+            if (expectedNextUrl && /^https?:\/\//i.test(expectedNextUrl) && !isSamePageContext(urlBeforeAction, expectedNextUrl)) {
+              // The recording moved to a different page after this action: wait
+              // for that page specifically, following every hop on the way.
+              const reached = await waitForRecordedPage(page, expectedNextUrl, 15000);
+              if (!reached) {
+                console.log(`[PLAYBACK] Expected "${expectedNextUrl}" after ${action}, currently "${page.url()}". Continuing; the next step will re-check.`);
+              }
+            } else {
+              // No page change recorded: still allow for one, but do not block.
+              await page.waitForURL(url => url.toString() !== urlBeforeAction, { timeout: 4000 }).catch(() => {});
+            }
+
+            page = getActivePage();
             await ensurePageFullyReady(page, 8000);
+
+            if (page.url() !== urlBeforeAction) {
+              console.log(`[PLAYBACK] Navigation detected\n  Previous URL: ${urlBeforeAction}\n  Current URL: ${page.url()}`);
+            }
           }
         } catch (stepException: any) {
           stepPassed = false;
           stepError = stepException.message || 'Step execution error.';
         }
 
+        // Report against whatever page is live now, including one a step opened
+        page = getActivePage();
         const resultingUrl = page.url() || currentUrl;
         currentUrl = resultingUrl;
         const pageTitle = await page.title().catch(() => '');
@@ -5891,9 +6273,40 @@ async function startServer() {
         sendEvent('step_result', { result: resultItem });
 
         if (!stepPassed) {
-          console.log(`[Playback Engine] Stopping playback after step ${i + 1} due to error: ${stepError}`);
-          break;
+          consecutiveFailures++;
+
+          // A failed step only invalidates the rest of the run if the flow
+          // depended on it to move on. Decide from the recording itself: if the
+          // browser is still on the page the next step expects, the remaining
+          // steps are just as runnable as before, and continuing reports every
+          // broken locator in one pass instead of one per run.
+          const nextStep = steps.slice(i + 1).find((s: any) => s && !s.skipped);
+          const nextExpectedUrl = nextStep
+            ? (resolveFullStepUrl(nextStep.url, currentUrl) || resolveCandidateNavUrl(nextStep, currentUrl))
+            : null;
+          const nextStepStillReachable = !nextStep ||
+            !nextExpectedUrl ||
+            !/^https?:\/\//i.test(nextExpectedUrl) ||
+            isSamePageContext(page.url(), nextExpectedUrl);
+
+          if (!nextStep) {
+            console.log(`[PLAYBACK] Step ${i + 1} failed: ${stepError}`);
+            break;
+          }
+          if (!nextStepStillReachable) {
+            console.log(`[PLAYBACK] Stopping after step ${i + 1}: ${stepError}\n  The flow expected "${nextExpectedUrl}" next but the browser is on "${page.url()}", so the remaining steps would run on the wrong page.`);
+            break;
+          }
+          if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
+            console.log(`[PLAYBACK] Stopping after step ${i + 1}: ${MAX_CONSECUTIVE_FAILURES} steps failed in a row, so the page is no longer what the recording expects.`);
+            break;
+          }
+
+          console.log(`[PLAYBACK] Step ${i + 1} failed: ${stepError}\n  Still on the page the next step expects (${page.url()}), continuing so the whole run is reported.`);
+          continue;
         }
+
+        consecutiveFailures = 0;
       }
 
       // If Slack Integration is configured and enabled, optionally trigger notification
@@ -9617,6 +10030,30 @@ pause
     res.json({ success: true });
   });
 
+  // Real UIAutomator hierarchy streamed from the device agent, per user. Steps are
+  // resolved against this so recorded locators point at nodes that genuinely exist
+  // in the app under test.
+  const deviceHierarchyCache = new Map<string, { xml: string; capturedAt: number; deviceId?: string; packageName?: string }>();
+
+  app.post(["/api/device-agent/upload-hierarchy", "/api/mobile/agent/upload-hierarchy"], (req, res) => {
+    const { email, xml, deviceId, packageName } = req.body;
+    const userEmail = (email || "sowbarnya@qaoncloud.com").toLowerCase();
+
+    if (typeof xml !== 'string' || !xml.includes('<hierarchy')) {
+      return res.status(400).json({ success: false, error: 'A UIAutomator <hierarchy> XML document is required.' });
+    }
+
+    const entry = { xml, capturedAt: Date.now(), deviceId, packageName };
+    deviceHierarchyCache.set(userEmail, entry);
+
+    const session = activeMobileSessions.get(userEmail);
+    if (session) {
+      session.pageSourceXml = xml;
+    }
+
+    res.json({ success: true, capturedAt: entry.capturedAt });
+  });
+
   // In-memory device logcat buffer per email/device
   const deviceLogsBuffer = new Map<string, Array<{
     id: string;
@@ -10276,30 +10713,24 @@ pause
       });
     }
 
-    if (session && session.pageSourceXml) {
-      return res.json({
-        success: true,
-        xml: session.pageSourceXml
+    // Only ever serve the hierarchy the agent actually dumped from the device.
+    // Inventing a placeholder here would produce recorded steps that point at
+    // elements the app under test does not contain.
+    const cached = deviceHierarchyCache.get(email);
+    const xml = cached?.xml || session?.pageSourceXml;
+
+    if (!xml) {
+      return res.status(503).json({
+        success: false,
+        error: "No UI hierarchy has been captured from the device yet. Make sure the app under test is in the foreground and retry in a moment."
       });
     }
 
-    // Return dynamic XML matching current package
-    const pkg = session?.packageName || 'com.uploaded.application';
-    const dynamicXml = `<hierarchy rotation="0">
-  <android.widget.FrameLayout bounds="[0,0][1080,2400]">
-    <android.widget.LinearLayout bounds="[0,80][1080,2320]">
-      <android.widget.TextView resource-id="${pkg}:id/title_text" text="Welcome to Mobile Application" bounds="[90,340][990,720]" clickable="false" enabled="true"/>
-      <android.widget.EditText resource-id="${pkg}:id/input_user" content-desc="input_user" text="user@domain.com" bounds="[90,810][990,930]" clickable="true" enabled="true"/>
-      <android.widget.EditText resource-id="${pkg}:id/input_password" content-desc="input_password" text="" bounds="[90,1020][990,1140]" clickable="true" enabled="true"/>
-      <android.widget.Button resource-id="${pkg}:id/btn_login" content-desc="btn_login" text="SIGN IN / GET STARTED" bounds="[90,1190][990,1320]" clickable="true" enabled="true"/>
-      <android.widget.Button resource-id="${pkg}:id/btn_explore" content-desc="btn_explore" text="EXPLORE COURTS &amp; ARENA" bounds="[90,1350][990,1480]" clickable="true" enabled="true"/>
-    </android.widget.LinearLayout>
-  </android.widget.FrameLayout>
-</hierarchy>`;
-
     res.json({
       success: true,
-      xml: dynamicXml
+      xml,
+      capturedAt: cached?.capturedAt,
+      stale: cached ? Date.now() - cached.capturedAt > 5000 : undefined
     });
   });
 
