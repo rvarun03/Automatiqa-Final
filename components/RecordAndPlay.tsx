@@ -7725,54 +7725,40 @@ ${scriptSteps.map(step => formatStepToScript(step, 'web')).join('\n')}
                 {/* Visual View (Iframe or Simulator Frame) */}
                 <div className="flex-1 bg-slate-950 p-6 flex flex-col justify-between overflow-y-auto custom-scrollbar border-r border-slate-800">
                   {activeVideoUrl ? (
-                    /* Session video: what the recording actually did. Nothing is
-                       executed against the site while this plays. */
-                    <div className="w-full h-full bg-slate-900 rounded-2xl border border-slate-800 overflow-hidden flex flex-col relative min-h-[350px]">
-                      <div className="px-4 py-2 bg-slate-950 border-b border-slate-800 flex items-center justify-between">
-                        <div className="flex items-center gap-2 min-w-0">
-                          <Video size={14} className="text-emerald-400 shrink-0" />
-                          <span className="text-[11px] font-black text-emerald-300 uppercase tracking-widest">
-                            Recorded Session Video
-                          </span>
-                          <span className="text-[10px] text-slate-500 truncate">
-                            {playbackFlow?.steps?.length || 0} steps captured
-                          </span>
-                        </div>
-                        <button
-                          onClick={() => {
-                            setActiveVideoUrl(null);
-                            setPlaybackUsesVideo(false);
-                            setPlaybackLogs(prev => [...prev, {
-                              timestamp: new Date().toLocaleTimeString(),
-                              level: 'info',
-                              message: '⚙️ Switched to the automation engine. Press Play to execute the steps against the live site.'
-                            }]);
-                          }}
-                          className="px-2 py-0.5 rounded border border-slate-700 bg-slate-800 text-slate-300 text-[9px] font-black uppercase tracking-wider hover:bg-slate-700 transition-all flex items-center gap-1.5 shrink-0"
-                          title="Run the recorded steps against the live site instead of watching the video"
-                        >
-                          <Play size={10} /> Run Automation Instead
-                        </button>
-                      </div>
-                      <div className="flex-1 bg-black flex items-center justify-center">
-                        <video
-                          key={activeVideoUrl}
-                          src={activeVideoUrl}
-                          controls
-                          autoPlay
-                          className="w-full h-full object-contain"
-                          onError={() => {
-                            setPlaybackLogs(prev => [...prev, {
-                              timestamp: new Date().toLocaleTimeString(),
-                              level: 'error',
-                              message: 'Could not load the session video file. It may have been cleared from the server.'
-                            }]);
-                          }}
-                        />
-                      </div>
-                      <div className="px-4 py-2 bg-slate-950 border-t border-slate-800 text-[10px] text-slate-500">
-                        This is a replay of the recorded session. No actions are being performed on the site, so nothing is verified.
-                      </div>
+                    /* Just the video. The surrounding labels and step counts only
+                       competed with the footage for attention. */
+                    <div className="w-full h-full bg-black rounded-2xl border border-slate-800 overflow-hidden flex flex-col relative min-h-[350px]">
+                      <video
+                        key={activeVideoUrl}
+                        src={activeVideoUrl}
+                        controls
+                        autoPlay
+                        className="w-full h-full object-contain bg-black"
+                        onError={() => {
+                          setPlaybackLogs(prev => [...prev, {
+                            timestamp: new Date().toLocaleTimeString(),
+                            level: 'error',
+                            message: 'Could not load the playback video file. It may have been cleared from the server.'
+                          }]);
+                        }}
+                      />
+                      {/* Kept as a small overlay so the automation engine stays
+                          reachable without taking space from the video. */}
+                      <button
+                        onClick={() => {
+                          setActiveVideoUrl(null);
+                          setPlaybackUsesVideo(false);
+                          setPlaybackLogs(prev => [...prev, {
+                            timestamp: new Date().toLocaleTimeString(),
+                            level: 'info',
+                            message: '⚙️ Switched to the automation engine. Press Play to execute the steps against the live site.'
+                          }]);
+                        }}
+                        className="absolute top-3 right-3 px-2.5 py-1 rounded-lg border border-slate-700 bg-slate-900/80 backdrop-blur text-slate-300 text-[9px] font-black uppercase tracking-wider hover:bg-slate-800 transition-all flex items-center gap-1.5 z-10"
+                        title="Run the recorded steps against the live site instead of watching the video"
+                      >
+                        <Play size={10} /> Run Automation Instead
+                      </button>
                     </div>
                   ) : playbackFlow?.platform === 'web' ? (
                     <div className="w-full h-full bg-slate-900 rounded-2xl border border-slate-800 overflow-hidden flex flex-col relative min-h-[350px]">
@@ -8153,7 +8139,11 @@ ${scriptSteps.map(step => formatStepToScript(step, 'web')).join('\n')}
                   )}
                 </div>
 
-                {/* Right Panel: Step Timeline & Console */}
+                {/* Right Panel: Step Timeline & Console.
+                    Web playback gives the video the full width - the step list is
+                    still one click away on the Timeline tab, and the Logs tab
+                    keeps working the same way. Mobile playback is unchanged. */}
+                {!(playbackFlow?.platform === 'web' && playbackActiveTab === 'view') && (
                 <div className="w-full md:w-[420px] bg-slate-950 p-6 flex flex-col justify-between overflow-y-auto custom-scrollbar border-t md:border-t-0 md:border-l border-slate-800">
                   <div className="flex-1 flex flex-col overflow-hidden">
                     
@@ -8327,6 +8317,7 @@ ${scriptSteps.map(step => formatStepToScript(step, 'web')).join('\n')}
                   </div>
 
                 </div>
+                )}
 
               </div>
             </motion.div>
