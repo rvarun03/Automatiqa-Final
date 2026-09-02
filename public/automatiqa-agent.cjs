@@ -155,15 +155,24 @@ async function getElementAtCoordinates(deviceId, x, y) {
           const area = width * height;
           const attr = (name) => nodeStr.match(new RegExp(`${name}="([^"]*)"`))?.[1] || '';
           const clickable = attr('clickable') === 'true';
+          const focused = attr('focused') === 'true';
           const hasResourceId = !!attr('resource-id');
           const hasDesc = !!attr('content-desc');
           const hasText = !!attr('text');
-          const qualityTier = clickable && hasResourceId ? 0
-            : clickable && hasDesc ? 1
-              : clickable && hasText ? 2
-                : hasResourceId ? 3
-                  : hasDesc ? 4
-                    : hasText ? 5
+          const resourceIdTail = attr('resource-id').split('/').pop() || '';
+          const isGenericResourceId = /^(?:container|content|root|layout|view|wrapper|item|row|column|frame|screen)(?:[_-]?\d+)?$/i.test(resourceIdTail);
+          const semanticText = attr('content-desc') || attr('text');
+          const hasReadableSemanticText = /[a-z0-9]{2}/i.test(semanticText);
+          const isInput = /EditText$/i.test(attr('class'));
+          const qualityTier = focused && isInput ? -1
+            : clickable && hasReadableSemanticText ? 0
+            : clickable && hasResourceId && !isGenericResourceId ? 1
+              : hasDesc && hasReadableSemanticText ? 2
+                : hasText && hasReadableSemanticText ? 3
+                  : hasResourceId && !isGenericResourceId ? 4
+                    : hasResourceId ? 5
+                      : hasDesc ? 6
+                        : hasText ? 7
                       : clickable ? 6 : 7;
           const score = qualityTier * 1e12 + area;
           if (score < bestScore) {
@@ -184,9 +193,14 @@ async function getElementAtCoordinates(deviceId, x, y) {
       const resourceId = getAttr('resource-id');
       const contentDescription = getAttr('content-desc');
       const text = getAttr('text');
+      const hint = getAttr('hint');
+      const password = getAttr('password') === 'true';
+      const focused = getAttr('focused') === 'true';
       const className = getAttr('class') || 'android.view.View';
+      const bounds = getAttr('bounds');
       const isAndroidSystemSurface = /^android:id\/(?:navigationBarBackground|statusBarBackground|content)$/i.test(resourceId);
-      if (isAndroidSystemSurface || !(resourceId || contentDescription || text)) return null;
+      const isNativeInteractiveControl = /(?:EditText|Button|CheckBox|RadioButton|Switch|Spinner)$/i.test(className);
+      if (isAndroidSystemSurface || (!(resourceId || contentDescription || text) && !isNativeInteractiveControl)) return null;
 
       let xpath = '';
       if (resourceId) {
@@ -196,7 +210,7 @@ async function getElementAtCoordinates(deviceId, x, y) {
       } else if (contentDescription) {
         xpath = `//${className}[@content-desc="${contentDescription}"]`;
       } else {
-        xpath = `//${className}`;
+        xpath = bounds ? `//${className}[@bounds='${bounds}']` : `//${className}`;
       }
 
       return {
@@ -204,6 +218,11 @@ async function getElementAtCoordinates(deviceId, x, y) {
         accessibilityId: contentDescription || undefined,
         contentDescription,
         text,
+        hint,
+        password,
+        focused,
+        className,
+        bounds,
         xpath
       };
     }
@@ -283,13 +302,27 @@ function getJson(urlStr) {
 
 function getAndroidElementName(locatorAttr) {
   if (!locatorAttr) return '';
-  const semanticName = locatorAttr.text || locatorAttr.contentDescription || locatorAttr.accessibilityId;
-  if (semanticName && String(semanticName).trim()) return String(semanticName).trim();
+  const className = String(locatorAttr.className || '').split('.').pop();
+  const identity = `${locatorAttr.resourceId || ''} ${locatorAttr.hint || ''} ${locatorAttr.contentDescription || ''}`;
+  if (/EditText/i.test(className)) {
+    if (locatorAttr.password || /pass(?:word|code)|pin/i.test(identity)) return 'Password field';
+    if (/email/i.test(identity)) return 'Email field';
+    if (/user(?:name)?/i.test(identity)) return 'Username field';
+    if (locatorAttr.hint) return `${locatorAttr.hint} field`;
+    return 'Text field';
+  }
+  const semanticName = locatorAttr.contentDescription || locatorAttr.accessibilityId || locatorAttr.text;
+  if (semanticName && /[a-z0-9]{2}/i.test(String(semanticName))) return String(semanticName).trim();
   if (locatorAttr.resourceId) {
     const id = String(locatorAttr.resourceId).split(/[:\/]id\//).pop() || String(locatorAttr.resourceId);
-    return id.replace(/[_-]+/g, ' ').replace(/\b\w/g, c => c.toUpperCase()).trim();
+    const words = id.replace(/([a-z0-9])([A-Z])/g, '$1 $2').replace(/[_-]+/g, ' ').replace(/^(?:btn|button|toolbar|nav|navigation)\s+/i, '').trim();
+    if (/arrow\s*back|back\s*arrow|navigate\s*up/i.test(words)) return 'Back button';
+    if (/profile|account|avatar/i.test(words)) return 'Profile button';
+    if (/^(?:container|content|root|layout|view|wrapper|item|row|column|frame|screen)$/i.test(words)) return '';
+    const title = words.replace(/\b\w/g, c => c.toUpperCase());
+    return /Button$/i.test(className) && !/\bbutton$/i.test(title) ? `${title} button` : title;
   }
-  const className = String(locatorAttr.className || '').split('.').pop();
+  if (/Button/i.test(className)) return 'Button';
   return className && className !== 'View' ? className.replace(/([a-z])([A-Z])/g, '$1 $2') : '';
 }
 
@@ -392,10 +425,19 @@ async function startStreamingAndCommandPolling() {
           }
 
           if (cmd) {
+            // Finish the hierarchy read before executing the tap so mutable
+            // labels describe the state the user clicked, not the next state.
+            if (locatorPromise) {
+              locatorAttr = await locatorPromise.catch(() => null);
+            }
             await runCmd(cmd);
 
             if (locatorPromise) {
-              locatorAttr = await locatorPromise.catch(() => null);
+              if (action === 'click' || action === 'tap') {
+                await new Promise(resolve => setTimeout(resolve, 120));
+                const focusedAttr = await getElementAtCoordinates(actionDeviceId, params.x, params.y).catch(() => null);
+                if (focusedAttr?.focused || !locatorAttr) locatorAttr = focusedAttr;
+              }
             }
 
             await postJson(`${serverUrl}/api/device-agent/upload-logs`, {

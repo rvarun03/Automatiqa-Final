@@ -152,7 +152,7 @@ async function getElementAtCoordinates(deviceId, x, y) {
     const nodeRegex = /<node\s+([^>]*)\s*bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"([^>]*)\/?>/g;
     let match;
     let bestNodeAttributes = null;
-    let smallestArea = Infinity;
+    let bestScore = Infinity;
 
     while ((match = nodeRegex.exec(xmlContent)) !== null) {
       const allAttrs = (match[1] + ' ' + match[6]).trim();
@@ -174,23 +174,35 @@ async function getElementAtCoordinates(deviceId, x, y) {
         };
 
         const isClickable = getAttr('clickable') === 'true';
+        const isFocused = getAttr('focused') === 'true';
         const hasText = !!getAttr('text');
         const hasDesc = !!getAttr('content-desc');
 
-        // Prefer clickable or labeled elements
-        let areaScore = area;
-        if (isClickable || hasText || hasDesc) {
-          areaScore = area * 0.8; // Give priority
-        }
+        const hasResourceId = !!getAttr('resource-id');
+        // Semantic/clickable nodes are far more useful than a tiny anonymous
+        // child view. Area only breaks ties inside the same quality tier.
+        const isInput = /EditText$/i.test(getAttr('class'));
+        const qualityTier = isFocused && isInput ? -1
+          : isClickable && hasResourceId ? 0
+          : isClickable && hasDesc ? 1
+            : isClickable && hasText ? 2
+              : hasResourceId ? 3
+                : hasDesc ? 4
+                  : hasText ? 5
+                    : isClickable ? 6 : 7;
+        const areaScore = qualityTier * 1e12 + area;
 
-        if (areaScore < smallestArea) {
-          smallestArea = areaScore;
+        if (areaScore < bestScore) {
+          bestScore = areaScore;
           bestNodeAttributes = {
             resourceId: getAttr('resource-id'),
             contentDescription: getAttr('content-desc'),
             text: getAttr('text'),
+            hint: getAttr('hint'),
+            password: getAttr('password') === 'true',
             className: getAttr('class') || 'android.view.View',
             clickable: isClickable,
+            focused: isFocused,
             bounds: `[${x1},${y1}][${x2},${y2}]`
           };
         }
@@ -199,32 +211,67 @@ async function getElementAtCoordinates(deviceId, x, y) {
 
     if (!bestNodeAttributes) return null;
 
-    const { resourceId, contentDescription, text, className } = bestNodeAttributes;
+    let { resourceId, contentDescription, text, hint, password, className, bounds, focused } = bestNodeAttributes;
+    // Some apps expose an empty EditText but render its label as a nearby
+    // TextView. Associate the closest label above/overlapping the input.
+    if (!resourceId && !contentDescription && !text && !hint && /EditText$/i.test(className || '')) {
+      const inputBounds = bounds.match(/\[(\d+),(\d+)\]\[(\d+),(\d+)\]/);
+      if (inputBounds) {
+        const [, ix1, iy1, ix2] = inputBounds.map(Number);
+        const labels = [];
+        const labelRegex = /<node\s+([^>]*)\s+bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"([^>]*)\/?>/g;
+        let labelMatch;
+        while ((labelMatch = labelRegex.exec(xmlContent)) !== null) {
+          const attrs = `${labelMatch[1]} ${labelMatch[6]}`;
+          const label = attrs.match(/(?:text|content-desc)="([^"]+)"/)?.[1]?.trim();
+          if (!label) continue;
+          const lx1 = Number(labelMatch[2]);
+          const ly2 = Number(labelMatch[5]);
+          const lx2 = Number(labelMatch[4]);
+          const overlapsHorizontally = lx2 >= ix1 && lx1 <= ix2;
+          const verticalDistance = Number(iy1) - ly2;
+          if (overlapsHorizontally && verticalDistance >= -40 && verticalDistance <= 300) {
+            labels.push({ label, distance: Math.abs(verticalDistance) });
+          }
+        }
+        labels.sort((a, b) => a.distance - b.distance);
+        hint = labels[0]?.label || '';
+      }
+    }
+    const isAndroidSystemSurface = /^android:id\/(?:navigationBarBackground|statusBarBackground|content)$/i.test(resourceId);
+    const hasStableSemanticLocator = !!(resourceId || contentDescription || text);
+    const isNativeInteractiveControl = /(?:EditText|Button|CheckBox|RadioButton|Switch|Spinner)$/i.test(className || '');
+    // Containers, root canvas views and Android system bars are not the
+    // control the user intended to tap. Returning null makes the recorder use
+    // its coordinate fallback instead of emitting a misleading XPath.
+    if (isAndroidSystemSurface || (!hasStableSemanticLocator && !isNativeInteractiveControl)) return null;
     let xpath = '';
     let primaryType = 'xpath';
     let primaryValue = '';
     let playwrightScript = '';
 
-    if (text) {
-      primaryType = 'text';
-      primaryValue = text;
-      xpath = `//*[@text="${text}"]`;
-      playwrightScript = `const el = await driver.elementByXPath("//*[@text='${text}']");\nawait el.click();`;
+    if (resourceId) {
+      primaryType = 'resource-id';
+      primaryValue = resourceId;
+      xpath = `//*[@resource-id="${resourceId}"]`;
+      playwrightScript = `await driver.elementById("${resourceId}").click();`;
     } else if (contentDescription) {
       primaryType = 'accessibility-id';
       primaryValue = contentDescription;
       xpath = `//*[@content-desc="${contentDescription}"]`;
       playwrightScript = `await driver.elementByAccessibilityId("${contentDescription}").click();`;
-    } else if (resourceId) {
-      primaryType = 'resource-id';
-      primaryValue = resourceId;
-      xpath = `//*[@resource-id="${resourceId}"]`;
-      playwrightScript = `await driver.elementById("${resourceId}").click();`;
-    } else {
+    } else if (text) {
+      primaryType = 'text';
+      primaryValue = text;
+      xpath = `//*[@text="${text}"]`;
+      playwrightScript = `const el = await driver.elementByXPath("//*[@text='${text}']");\nawait el.click();`;
+    } else if (isNativeInteractiveControl) {
+      // Native inputs are still real Appium elements even when the application
+      // did not provide text, content-desc, or resource-id metadata.
       primaryType = 'xpath';
-      primaryValue = `//${className}[@bounds="${bestNodeAttributes.bounds}"]`;
+      primaryValue = `//${className}[@bounds='${bounds}']`;
       xpath = primaryValue;
-      playwrightScript = `await driver.elementByXPath("${xpath}").click();`;
+      playwrightScript = `const el = await driver.elementByXPath("${xpath}");\nawait el.click();`;
     }
 
     return {
@@ -232,7 +279,11 @@ async function getElementAtCoordinates(deviceId, x, y) {
       accessibilityId: contentDescription || undefined,
       contentDescription,
       text,
+      hint,
+      password,
       className,
+      bounds,
+      focused,
       xpath,
       primaryType,
       primaryValue,
@@ -430,6 +481,7 @@ async function startAdbTouchListener(deviceId) {
   let currentRawY = null;
   let isTouching = false;
   let lastRecordedTime = 0;
+  let elementAtTouchStart = null;
 
   try {
     touchListenerProcess = spawn('adb', ['-s', deviceId, 'shell', 'getevent', '-l']);
@@ -443,8 +495,9 @@ async function startAdbTouchListener(deviceId) {
       for (const line of lines) {
         if (!line) continue;
 
-        // Parse X coordinate (ABS_MT_POSITION_X, ABS_X, 0035, 0000)
-        if (line.includes('ABS_MT_POSITION_X') || line.includes('ABS_X') || line.includes('0035 ') || line.includes('0000 ')) {
+        // Parse only absolute X axis events. Event value/code 0000 is also
+        // used by EV_SYN and was incorrectly turning every recorded X into 0.
+        if (line.includes('ABS_MT_POSITION_X') || /\bABS_X\b/.test(line) || /\b0035\b/.test(line)) {
           const parts = line.trim().split(/\s+/);
           const hexVal = parts[parts.length - 1];
           const val = parseInt(hexVal, 16);
@@ -456,8 +509,8 @@ async function startAdbTouchListener(deviceId) {
             }
           }
         } 
-        // Parse Y coordinate (ABS_MT_POSITION_Y, ABS_Y, 0036, 0001)
-        else if (line.includes('ABS_MT_POSITION_Y') || line.includes('ABS_Y') || line.includes('0036 ') || line.includes('0001 ')) {
+        // Parse only absolute Y axis events; 0001 is not a safe Y identifier.
+        else if (line.includes('ABS_MT_POSITION_Y') || /\bABS_Y\b/.test(line) || /\b0036\b/.test(line)) {
           const parts = line.trim().split(/\s+/);
           const hexVal = parts[parts.length - 1];
           const val = parseInt(hexVal, 16);
@@ -467,11 +520,37 @@ async function startAdbTouchListener(deviceId) {
             if (currentRawY > touchDeviceBounds.touchMaxY && touchDeviceBounds.touchMaxY <= touchDeviceBounds.displayHeight) {
               touchDeviceBounds.touchMaxY = Math.max(32767, currentRawY);
             }
+            if (isTouching && !elementAtTouchStart && currentRawX !== null) {
+              const screenX = touchDeviceBounds.touchMaxX > touchDeviceBounds.displayWidth
+                ? Math.round((currentRawX / touchDeviceBounds.touchMaxX) * touchDeviceBounds.displayWidth)
+                : currentRawX;
+              const screenY = touchDeviceBounds.touchMaxY > touchDeviceBounds.displayHeight
+                ? Math.round((currentRawY / touchDeviceBounds.touchMaxY) * touchDeviceBounds.displayHeight)
+                : currentRawY;
+              elementAtTouchStart = getElementAtCoordinates(deviceId, screenX, screenY);
+            }
           }
-        } 
+        }
+        // Many Android touch drivers report tracking IDs without BTN_TOUCH.
+        else if ((line.includes('ABS_MT_TRACKING_ID') || line.includes('0039 ')) && !line.includes('ffffffff')) {
+          isTouching = true;
+        }
         // Touch / Mouse Down
         else if ((line.includes('BTN_TOUCH') || line.includes('BTN_LEFT') || line.includes('BTN_MOUSE')) && line.includes('DOWN')) {
           isTouching = true;
+          const rawX = currentRawX !== null ? currentRawX : lastSeenRawX;
+          const rawY = currentRawY !== null ? currentRawY : lastSeenRawY;
+          if (rawX !== null && rawY !== null) {
+            const screenX = touchDeviceBounds.touchMaxX > touchDeviceBounds.displayWidth
+              ? Math.round((rawX / touchDeviceBounds.touchMaxX) * touchDeviceBounds.displayWidth)
+              : rawX;
+            const screenY = touchDeviceBounds.touchMaxY > touchDeviceBounds.displayHeight
+              ? Math.round((rawY / touchDeviceBounds.touchMaxY) * touchDeviceBounds.displayHeight)
+              : rawY;
+            // Start Appium/UIAutomator inspection before the tap can navigate
+            // away from the element that the user actually touched.
+            elementAtTouchStart = getElementAtCoordinates(deviceId, screenX, screenY);
+          }
         } 
         // Touch / Mouse Up or Release
         else if (
@@ -505,7 +584,9 @@ async function startAdbTouchListener(deviceId) {
                 screenX = Math.max(0, Math.min(touchDeviceBounds.displayWidth, screenX));
                 screenY = Math.max(0, Math.min(touchDeviceBounds.displayHeight, screenY));
 
-                handlePhysicalEmulatorTap(deviceId, screenX, screenY);
+                const capturedElement = elementAtTouchStart;
+                elementAtTouchStart = null;
+                handlePhysicalEmulatorTap(deviceId, screenX, screenY, capturedElement);
               }
             }
           }
@@ -588,12 +669,22 @@ async function handleHardwareKeyPress(deviceId, keyName, keycode) {
   }
 }
 
-async function handlePhysicalEmulatorTap(deviceId, x, y) {
+async function handlePhysicalEmulatorTap(deviceId, x, y, elementPromise) {
   try {
     console.log(`[ADB Tap Event] Detected physical tap at coordinates (${x}, ${y}) on ${deviceId}`);
-    const locatorAttr = await getElementAtCoordinates(deviceId, x, y);
+    const beforeTapElement = await (elementPromise || Promise.resolve(null));
+    // Inputs can expose their useful accessibility node only after receiving
+    // focus. Re-inspect after the tap and prefer the newly focused EditText.
+    await new Promise(resolve => setTimeout(resolve, 120));
+    const afterTapElement = await getElementAtCoordinates(deviceId, x, y);
+    const locatorAttr = afterTapElement?.focused || !beforeTapElement
+      ? afterTapElement
+      : beforeTapElement;
+    if (/EditText$/i.test(locatorAttr?.className || '')) {
+      lastFocusedElement = locatorAttr;
+    }
     
-    const labelName = getAndroidElementName(locatorAttr) || `Unlabelled Android element`;
+    const labelName = getAndroidElementName(locatorAttr) || `Screen position`;
     const playwrightCode = locatorAttr?.playwrightScript || `await driver.touchPerform([{ action: 'tap', options: { x: ${x}, y: ${y} } }]);`;
 
     const stepPayload = {
@@ -605,19 +696,24 @@ async function handlePhysicalEmulatorTap(deviceId, x, y) {
         elementName: labelName,
         locator: {
           primary: {
-            type: locatorAttr?.primaryType || 'xpath',
-            value: locatorAttr?.primaryValue || locatorAttr?.xpath || `//android.view.View[@bounds="[${x},${y}]"]`,
+            type: locatorAttr?.primaryType || 'coordinates',
+            value: locatorAttr?.primaryValue || locatorAttr?.xpath || JSON.stringify({ x, y, unit: 'pixels' }),
             playwright: playwrightCode
           },
           alternatives: [
             locatorAttr?.text ? { type: 'text', value: locatorAttr.text } : null,
             locatorAttr?.accessibilityId ? { type: 'accessibility-id', value: locatorAttr.accessibilityId } : null,
             locatorAttr?.resourceId ? { type: 'resource-id', value: locatorAttr.resourceId } : null,
-            locatorAttr?.xpath ? { type: 'xpath', value: locatorAttr.xpath } : null
+            locatorAttr?.xpath ? { type: 'xpath', value: locatorAttr.xpath } : null,
+            { type: 'coordinates', value: JSON.stringify({ x, y, unit: 'pixels' }) }
           ].filter(Boolean)
         },
         screen: "ActiveScreen",
         platform: 'mobile',
+        coordinates: { x, y },
+        x,
+        y,
+        bounds: locatorAttr?.bounds,
         timestamp: Date.now()
       }
     };
@@ -643,13 +739,22 @@ async function handlePhysicalEmulatorTap(deviceId, x, y) {
 
 function getAndroidElementName(locatorAttr) {
   if (!locatorAttr) return '';
+  const className = String(locatorAttr.className || '').split('.').pop();
+  const identity = `${locatorAttr.resourceId || ''} ${locatorAttr.hint || ''} ${locatorAttr.contentDescription || ''}`;
+  if (/EditText/i.test(className)) {
+    if (locatorAttr.password || /pass(?:word|code)|pin/i.test(identity)) return 'Password field';
+    if (/email/i.test(identity)) return 'Email field';
+    if (/user(?:name)?/i.test(identity)) return 'Username field';
+    if (locatorAttr.hint) return `${locatorAttr.hint} field`;
+    return 'Text field';
+  }
   const semanticName = locatorAttr.text || locatorAttr.contentDescription || locatorAttr.accessibilityId;
   if (semanticName && String(semanticName).trim()) return String(semanticName).trim();
   if (locatorAttr.resourceId) {
     const id = String(locatorAttr.resourceId).split(/[:/]id\//).pop() || String(locatorAttr.resourceId);
     return id.replace(/[_-]+/g, ' ').replace(/\b\w/g, c => c.toUpperCase()).trim();
   }
-  const className = String(locatorAttr.className || '').split('.').pop();
+  if (/Button/i.test(className)) return 'Button';
   return className && className !== 'View' ? className.replace(/([a-z])([A-Z])/g, '$1 $2') : '';
 }
 
@@ -835,6 +940,12 @@ async function startStreamingAndCommandPolling() {
             // promise started before the tap, so it describes the tapped screen.
             if (locatorPromise) {
               locatorAttr = await locatorPromise.catch(() => null);
+              if (action === 'click' || action === 'tap') {
+                await new Promise(resolve => setTimeout(resolve, 120));
+                const focusedAttr = await getElementAtCoordinates(actionDeviceId, params.x, params.y).catch(() => null);
+                if (focusedAttr?.focused || !locatorAttr) locatorAttr = focusedAttr;
+                if (/EditText$/i.test(locatorAttr?.className || '')) lastFocusedElement = locatorAttr;
+              }
             }
 
             await postJson(`${serverUrl}/api/device-agent/upload-logs`, {
@@ -844,7 +955,7 @@ async function startStreamingAndCommandPolling() {
               url: 'ADB'
             }).catch(() => {});
 
-            const labelName = getAndroidElementName(locatorAttr) || 'Unlabelled Android element';
+            const labelName = getAndroidElementName(locatorAttr) || 'Screen position';
             const stepPayload = {
               email: userEmail,
               event: {
@@ -854,8 +965,8 @@ async function startStreamingAndCommandPolling() {
                 elementName: labelName,
                 locator: {
                   primary: {
-                    type: locatorAttr?.primaryType || 'xpath',
-                    value: locatorAttr?.primaryValue || locatorAttr?.xpath || `//android.view.View`,
+                    type: locatorAttr?.primaryType || 'coordinates',
+                    value: locatorAttr?.primaryValue || locatorAttr?.xpath || JSON.stringify({ x: params.x, y: params.y, unit: 'pixels' }),
                     playwright: locatorAttr?.playwrightScript || ((action === 'click' || action === 'tap')
                       ? `await driver.touchPerform([{ action: 'tap', options: { x: ${params.x}, y: ${params.y} } }]);`
                       : action === 'fill' || action === 'type'
@@ -866,7 +977,10 @@ async function startStreamingAndCommandPolling() {
                     locatorAttr?.text ? { type: 'text', value: locatorAttr.text } : null,
                     locatorAttr?.accessibilityId ? { type: 'accessibility-id', value: locatorAttr.accessibilityId } : null,
                     locatorAttr?.resourceId ? { type: 'resource-id', value: locatorAttr.resourceId } : null,
-                    locatorAttr?.xpath ? { type: 'xpath', value: locatorAttr.xpath } : null
+                    locatorAttr?.xpath ? { type: 'xpath', value: locatorAttr.xpath } : null,
+                    params.x !== undefined && params.y !== undefined
+                      ? { type: 'coordinates', value: JSON.stringify({ x: params.x, y: params.y, unit: 'pixels' }) }
+                      : null
                   ].filter(Boolean)
                 },
                 screen: "ActiveScreen",

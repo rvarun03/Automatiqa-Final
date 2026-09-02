@@ -188,7 +188,8 @@ function sanitizeClientUrl(rawUrl: string, baseUrl?: string): string {
 function isTechnicalMobileLocator(step: Partial<RecordedStep>): boolean {
   if (step.platform !== 'mobile') return false;
   const locator = `${step.locator?.primary?.value || ''} ${step.locator?.primary?.playwright || ''}`;
-  return /@bounds\s*=/.test(locator) ||
+  const isNamedNativeControl = /android\.(?:widget|view)\.(?:EditText|Button|CheckBox|RadioButton|Switch|Spinner)/i.test(locator);
+  return (/@bounds\s*=/.test(locator) && !isNamedNativeControl) ||
     /android:id\/(?:navigationBarBackground|statusBarBackground|content)/i.test(locator) ||
     /android\.(?:widget\.ScrollView|view\\?\.View)(?:\[|$)/i.test(step.locator?.primary?.value || '') ||
     step.locator?.primary?.type === 'coordinates';
@@ -2334,6 +2335,33 @@ const RecordAndPlay: React.FC<RecordAndPlayProps> = ({ project, user, onUpdatePr
       resolvedScreen = activeScreenRef.current;
     }
 
+    // Android often exposes the useful field semantics only after the first
+    // tap has focused it. When the following typing event identifies that
+    // field, enrich the earlier generic focus tap instead of leaving it as
+    // "Screen position". Its original coordinate locator remains untouched.
+    if (eventData.platform === 'mobile' &&
+        (eventData.action === 'fill' || eventData.action === 'type') &&
+        eventData.elementName &&
+        !/^(?:screen position|text field|input text:)/i.test(eventData.elementName)) {
+      setCurrentSteps(existing => {
+        let genericTapIndex = -1;
+        for (let index = existing.length - 1; index >= 0; index -= 1) {
+          const step = existing[index];
+          if (step.platform === 'mobile' &&
+              step.action === 'click' &&
+              /^(?:screen position|resolving android element…|tap at \(|element at \()/i.test(step.elementName || '') &&
+              Date.now() - (step.timestamp || 0) < 30000) {
+            genericTapIndex = index;
+            break;
+          }
+        }
+        if (genericTapIndex < 0) return existing;
+        return existing.map((step, index) => index === genericTapIndex
+          ? { ...step, elementName: eventData.elementName }
+          : step);
+      });
+    }
+
     setCurrentSteps(prev => {
       const lastStep = prev[prev.length - 1];
 
@@ -2343,7 +2371,8 @@ const RecordAndPlay: React.FC<RecordAndPlayProps> = ({ project, user, onUpdatePr
       const isCoordinatePlaceholder = lastStep?.platform === 'mobile' &&
         lastStep.action === 'click' &&
         (/^(Tap|Element) at \(\d+,\s*\d+\)$/i.test(lastStep.elementName || '') ||
-         lastStep.elementName === 'Resolving Android element…');
+         lastStep.elementName === 'Resolving Android element…' ||
+         lastStep.elementName === 'Screen position');
       const hasResolvedMobileName = eventData.platform === 'mobile' &&
         eventData.action === 'click' &&
         eventData.elementName &&
@@ -4124,8 +4153,8 @@ const RecordAndPlay: React.FC<RecordAndPlayProps> = ({ project, user, onUpdatePr
     const pw = primary?.playwright?.trim();
 
     const isBadMobileNode = isMobile && (
-      /@bounds\s*=/.test(primary?.value || '') ||
-      /@bounds\s*=/.test(pw || '') ||
+      (/@bounds\s*=/.test(`${primary?.value || ''} ${pw || ''}`) &&
+        !/android\.(?:widget|view)\.(?:EditText|Button|CheckBox|RadioButton|Switch|Spinner)/i.test(`${primary?.value || ''} ${pw || ''}`)) ||
       /android:id\/(?:navigationBarBackground|statusBarBackground|content)/i.test(primary?.value || '') ||
       /android:id\/(?:navigationBarBackground|statusBarBackground|content)/i.test(pw || '') ||
       /android\.(?:widget\.ScrollView|view\\?\.View)(?:\[|$)/i.test(primary?.value || '')
@@ -4158,6 +4187,13 @@ const RecordAndPlay: React.FC<RecordAndPlayProps> = ({ project, user, onUpdatePr
     if (isBadMobileNode && step.action === 'click') {
       const fallback = coordinateScript();
       if (fallback) return fallback;
+    }
+
+    if (isMobile && step.action === 'navigate') {
+      const appId = String(step.value || primary?.value || '').split('/')[0];
+      return appId
+        ? `  await driver.activateApp("${appId}");`
+        : '  // App navigation captured';
     }
 
     if (!isBadMobileNode && pw && (pw.startsWith('await ') || pw.startsWith('const ') || pw.startsWith('let ') || pw.startsWith('//') || pw.startsWith('expect(') || pw.includes('\nawait ') || pw.includes('\nconst '))) {
