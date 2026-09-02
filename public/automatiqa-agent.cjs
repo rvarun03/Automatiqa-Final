@@ -140,7 +140,7 @@ async function getElementAtCoordinates(deviceId, x, y) {
       const nodeRegex = /<node[^>]*bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"[^>]*>/g;
       let match;
       let bestNodeStr = null;
-      let smallestArea = Infinity;
+      let bestScore = Infinity;
 
       while ((match = nodeRegex.exec(xmlContent)) !== null) {
         const nodeStr = match[0];
@@ -153,8 +153,21 @@ async function getElementAtCoordinates(deviceId, x, y) {
           const width = x2 - x1;
           const height = y2 - y1;
           const area = width * height;
-          if (area < smallestArea) {
-            smallestArea = area;
+          const attr = (name) => nodeStr.match(new RegExp(`${name}="([^"]*)"`))?.[1] || '';
+          const clickable = attr('clickable') === 'true';
+          const hasResourceId = !!attr('resource-id');
+          const hasDesc = !!attr('content-desc');
+          const hasText = !!attr('text');
+          const qualityTier = clickable && hasResourceId ? 0
+            : clickable && hasDesc ? 1
+              : clickable && hasText ? 2
+                : hasResourceId ? 3
+                  : hasDesc ? 4
+                    : hasText ? 5
+                      : clickable ? 6 : 7;
+          const score = qualityTier * 1e12 + area;
+          if (score < bestScore) {
+            bestScore = score;
             bestNodeStr = nodeStr;
           }
         }
@@ -172,6 +185,8 @@ async function getElementAtCoordinates(deviceId, x, y) {
       const contentDescription = getAttr('content-desc');
       const text = getAttr('text');
       const className = getAttr('class') || 'android.view.View';
+      const isAndroidSystemSurface = /^android:id\/(?:navigationBarBackground|statusBarBackground|content)$/i.test(resourceId);
+      if (isAndroidSystemSurface || !(resourceId || contentDescription || text)) return null;
 
       let xpath = '';
       if (resourceId) {
@@ -186,7 +201,7 @@ async function getElementAtCoordinates(deviceId, x, y) {
 
       return {
         resourceId,
-        accessibilityId: contentDescription || resourceId || undefined,
+        accessibilityId: contentDescription || undefined,
         contentDescription,
         text,
         xpath
@@ -390,7 +405,7 @@ async function startStreamingAndCommandPolling() {
               url: 'ADB'
             });
 
-            const labelName = getAndroidElementName(locatorAttr) || 'Unlabelled Android element';
+            const labelName = getAndroidElementName(locatorAttr) || 'Screen position';
             const stepPayload = {
               email: userEmail,
               event: {
@@ -400,8 +415,8 @@ async function startStreamingAndCommandPolling() {
                 elementName: labelName,
                 locator: {
                   primary: {
-                    type: locatorAttr?.accessibilityId ? 'accessibility-id' : locatorAttr?.resourceId ? 'resource-id' : 'xpath',
-                    value: locatorAttr?.accessibilityId || locatorAttr?.resourceId || locatorAttr?.xpath || `//android.view.View`,
+                    type: locatorAttr?.resourceId ? 'resource-id' : locatorAttr?.accessibilityId ? 'accessibility-id' : locatorAttr?.xpath ? 'xpath' : 'coordinates',
+                    value: locatorAttr?.resourceId || locatorAttr?.accessibilityId || locatorAttr?.xpath || JSON.stringify({ x: params.x, y: params.y, unit: 'pixels' }),
                     playwright: (action === 'click' || action === 'tap')
                       ? `await driver.touchPerform([{ action: 'tap', options: { x: ${params.x}, y: ${params.y} } }]);`
                       : action === 'fill' || action === 'type'
@@ -411,7 +426,10 @@ async function startStreamingAndCommandPolling() {
                   alternatives: [
                     locatorAttr?.accessibilityId ? { type: 'accessibility-id', value: locatorAttr.accessibilityId } : null,
                     locatorAttr?.resourceId ? { type: 'resource-id', value: locatorAttr.resourceId } : null,
-                    locatorAttr?.xpath ? { type: 'xpath', value: locatorAttr.xpath } : null
+                    locatorAttr?.xpath ? { type: 'xpath', value: locatorAttr.xpath } : null,
+                    params.x !== undefined && params.y !== undefined
+                      ? { type: 'coordinates', value: JSON.stringify({ x: params.x, y: params.y, unit: 'pixels' }) }
+                      : null
                   ].filter(Boolean)
                 },
                 screen: "ActiveScreen",

@@ -961,19 +961,6 @@ async function startServer() {
       publishRecordedStep(sessionId, event);
     }).catch(() => {});
 
-    // Expose permission request trap
-    await page.exposeFunction('relayPermissionRequest', (permName: string) => {
-      const perms = (permName || 'camera').split(',').map(s => s.trim()).filter(Boolean);
-      console.log(`[Playwright Permission Intercept] Session ${sessionId} requested:`, perms);
-      io.emit('PERMISSION_REQUIRED', {
-        sessionId,
-        permissions: perms,
-        origin: page.url(),
-        reason: `The web application is requesting browser permission for ${perms.join(' & ')}.`,
-        timestamp: Date.now()
-      });
-    }).catch(() => {});
-
     const recorderClientFunction = (sessId: string) => {
       var __name = (typeof (window as any).__name !== 'undefined') ? (window as any).__name : function(t: any, v: any) { return t; };
       try {
@@ -1054,46 +1041,6 @@ async function startServer() {
             frameName: window.name || '',
             frameSelector: 'iframe',
             frameUrl: window.location.href
-          };
-        }
-      }
-
-      // Anti-Bot & Permission Trapping
-      if (!(window as any).__PERM_TRAP_ATTACHED__) {
-        (window as any).__PERM_TRAP_ATTACHED__ = true;
-        if (navigator.permissions && navigator.permissions.query) {
-          const origQuery = navigator.permissions.query.bind(navigator.permissions);
-          navigator.permissions.query = function(p: any) {
-            if (['camera', 'microphone', 'geolocation', 'notifications', 'clipboard-read', 'clipboard-write'].includes(p?.name)) {
-              (window as any).relayPermissionRequest && (window as any).relayPermissionRequest(p.name);
-            }
-            return origQuery(p);
-          };
-        }
-        if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
-          const origGUM = navigator.mediaDevices.getUserMedia.bind(navigator.mediaDevices);
-          navigator.mediaDevices.getUserMedia = function(constraints: any) {
-            const requested: string[] = [];
-            if (constraints.video) requested.push('camera');
-            if (constraints.audio) requested.push('microphone');
-            if (requested.length > 0) {
-              (window as any).relayPermissionRequest && (window as any).relayPermissionRequest(requested.join(','));
-            }
-            return origGUM(constraints);
-          };
-        }
-        if (navigator.geolocation && navigator.geolocation.getCurrentPosition) {
-          const origGeo = navigator.geolocation.getCurrentPosition.bind(navigator.geolocation);
-          navigator.geolocation.getCurrentPosition = function(success: any, error: any, opts: any) {
-            (window as any).relayPermissionRequest && (window as any).relayPermissionRequest('geolocation');
-            return origGeo(success, error, opts);
-          };
-        }
-        if (window.Notification && window.Notification.requestPermission) {
-          const origNotify = window.Notification.requestPermission.bind(window.Notification);
-          window.Notification.requestPermission = function() {
-            (window as any).relayPermissionRequest && (window as any).relayPermissionRequest('notifications');
-            return origNotify();
           };
         }
       }
@@ -3846,19 +3793,28 @@ async function startServer() {
           .filter(Boolean);
 
         if (validPerms.length > 0) {
-          await session.context.grantPermissions(validPerms as any, origin ? { origin } : undefined).catch(err => {
-            console.warn("[Playwright] grantPermissions warning:", err.message);
-          });
+          let permissionOrigin: string | undefined;
+          try {
+            permissionOrigin = origin ? new URL(unwrapProxyUrl(origin)).origin : undefined;
+          } catch (e) {
+            permissionOrigin = undefined;
+          }
+          // Do not report success when Chromium rejected the grant. Keeping the
+          // confirmation open lets the user retry instead of leaving the target
+          // application permanently blocked.
+          await session.context.grantPermissions(validPerms as any, permissionOrigin ? { origin: permissionOrigin } : undefined);
         }
       }
 
       session.grantedPermissions = Array.from(new Set([...(session.grantedPermissions || []), ...permsToGrant]));
+      session.status = 'RECORDING';
       
       io.emit('PERMISSION_GRANTED', {
         sessionId,
         permissions: permsToGrant,
         origin
       });
+      io.emit('RECORDING_READY', { sessionId, origin, permissions: permsToGrant });
 
       return res.json({ success: true, grantedPermissions: session.grantedPermissions });
     } catch (err: any) {
@@ -4505,6 +4461,8 @@ async function startServer() {
         platform: eventData.platform || 'web',
         timestamp: eventData.timestamp || Date.now(),
         masked: Boolean(eventData.masked),
+        originalValue: eventData.originalValue,
+        encryptedValue: eventData.encryptedValue,
         targetBox: eventData.targetBox,
         coordinates: eventData.coordinates,
         screenshot: eventData.screenshot,
@@ -4546,6 +4504,52 @@ async function startServer() {
     const session = sessions.get(sessionId);
 
     if (session) {
+      // Capture the authenticated web session before closing the recorder.
+      // Playback restores this state; it must never invent or auto-run a login.
+      let webStorageState: any = undefined;
+      if (session.platform === 'web' && session.context) {
+        webStorageState = await session.context.storageState().catch(err => {
+          console.warn(`Could not capture web storage state for session ${sessionId}:`, err?.message || err);
+          return undefined;
+        });
+      }
+      // Manual/proxy recording runs in the user's embedded browser rather than
+      // session.context. Preserve its target-site cookies for the real
+      // Playwright playback context as well.
+      if (session.platform === 'web' && req.headers.cookie) {
+        const targetOrigins = new Set<string>();
+        [session.initialUrl, session.url, ...session.steps.flatMap((step: any) => [step.url, step.action === 'navigate' ? step.value : ''])]
+          .filter(Boolean)
+          .forEach((candidate: string) => {
+            try { targetOrigins.add(new URL(unwrapProxyUrl(candidate)).origin); } catch (e) {}
+          });
+
+        const ignoredCookie = /^(?:qa_last_target_origin|connect\.sid|io|__.*)$/i;
+        const requestCookies = req.headers.cookie.split(';').map(pair => {
+          const separator = pair.indexOf('=');
+          if (separator <= 0) return null;
+          const name = pair.slice(0, separator).trim();
+          const value = pair.slice(separator + 1).trim();
+          return !name || ignoredCookie.test(name) ? null : { name, value };
+        }).filter(Boolean) as Array<{ name: string; value: string }>;
+
+        if (requestCookies.length > 0 && targetOrigins.size > 0) {
+          const existingCookies = Array.isArray(webStorageState?.cookies) ? webStorageState.cookies : [];
+          const proxyCookies = Array.from(targetOrigins).flatMap(origin =>
+            requestCookies.map(cookie => ({ ...cookie, url: origin }))
+          );
+          const merged = new Map<string, any>();
+          [...existingCookies, ...proxyCookies].forEach(cookie => {
+            const scope = cookie.domain || cookie.url || '';
+            merged.set(`${cookie.name}|${scope}|${cookie.path || '/'}`, cookie);
+          });
+          webStorageState = {
+            cookies: Array.from(merged.values()),
+            origins: Array.isArray(webStorageState?.origins) ? webStorageState.origins : []
+          };
+        }
+      }
+
       // Close Playwright browser if exists
       if (session.browser) {
         console.log(`Closing Playwright browser for session ${sessionId}`);
@@ -4562,7 +4566,7 @@ async function startServer() {
       const steps = session.steps;
       sessions.delete(sessionId);
       console.log(`Stopped recording session: ${sessionId}`);
-      res.json({ steps });
+      res.json({ steps, webStorageState });
     } else {
       // If session not found, it might have been already stopped or server restarted.
       // We return success with empty steps to avoid confusing the UI/User.
@@ -5556,7 +5560,8 @@ async function startServer() {
       githubConfig,
       slackConfig,
       appUrl,
-      syntheticUsers
+      syntheticUsers,
+      webStorageState
     } = req.body;
     if (!steps || !Array.isArray(steps) || steps.length === 0) {
       return res.status(400).json({ error: "Steps array is required" });
@@ -5599,13 +5604,47 @@ async function startServer() {
         ? 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.3.1 Mobile/15E148 Safari/604.1'
         : 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36';
 
+      // Backward compatibility for flows saved before webStorageState existed:
+      // proxy recordings keep the target session cookies in the AutomatiQA
+      // browser, so map those cookies back onto the recorded target origins.
+      let playbackStorageState = webStorageState;
+      if (req.headers.cookie) {
+        const targetOrigins = new Set<string>();
+        [initialUrl, appUrl, ...steps.flatMap((step: any) => [step.url, step.action === 'navigate' ? step.value : ''])]
+          .filter(Boolean)
+          .forEach((candidate: string) => {
+            try { targetOrigins.add(new URL(unwrapProxyUrl(candidate)).origin); } catch (e) {}
+          });
+        const ignoredCookie = /^(?:qa_last_target_origin|connect\.sid|io|__.*)$/i;
+        const liveCookies = req.headers.cookie.split(';').map(pair => {
+          const separator = pair.indexOf('=');
+          if (separator <= 0) return null;
+          const name = pair.slice(0, separator).trim();
+          const value = pair.slice(separator + 1).trim();
+          return !name || ignoredCookie.test(name) ? null : { name, value };
+        }).filter(Boolean) as Array<{ name: string; value: string }>;
+        if (liveCookies.length > 0 && targetOrigins.size > 0) {
+          const merged = new Map<string, any>();
+          const savedCookies = Array.isArray(playbackStorageState?.cookies) ? playbackStorageState.cookies : [];
+          [...savedCookies, ...Array.from(targetOrigins).flatMap(origin => liveCookies.map(cookie => ({ ...cookie, url: origin })))]
+            .forEach(cookie => merged.set(`${cookie.name}|${cookie.domain || cookie.url || ''}|${cookie.path || '/'}`, cookie));
+          playbackStorageState = {
+            cookies: Array.from(merged.values()),
+            origins: Array.isArray(playbackStorageState?.origins) ? playbackStorageState.origins : []
+          };
+        }
+      }
+
       context = await browser.newContext({
         viewport: { width, height },
         deviceScaleFactor: isMobile ? 2 : 1,
         isMobile,
         hasTouch: isMobile,
         userAgent,
-        ignoreHTTPSErrors: true
+        ignoreHTTPSErrors: true,
+        ...(playbackStorageState && Array.isArray(playbackStorageState.cookies) && Array.isArray(playbackStorageState.origins)
+          ? { storageState: playbackStorageState }
+          : {})
       });
 
       const page = await context.newPage();
@@ -5645,10 +5684,14 @@ async function startServer() {
 
       const resolveCandidateNavUrl = (stepObj: any, fallbackBase: string): string | null => {
         if (!stepObj) return null;
+        // A navigate step's value is the destination captured by the recorder.
+        // Its generic `url` field may describe the page the event originated
+        // from, so preferring it can incorrectly send playback back to the
+        // recording's initial target.
         const candidates = [
-          stepObj.url,
           stepObj.value,
           stepObj.locator?.primary?.type === 'url' ? stepObj.locator?.primary?.value : '',
+          stepObj.url,
           stepObj.selector
         ];
 
@@ -5733,6 +5776,29 @@ async function startServer() {
 
       currentUrl = await safeNavigatePage(currentUrl);
 
+      const hasRestoredWebSession = Boolean(
+        playbackStorageState &&
+        (playbackStorageState.cookies?.length || playbackStorageState.origins?.length)
+      );
+      const isAuthenticationUrl = (candidate?: string) => {
+        if (!candidate || typeof candidate !== 'string') return false;
+        try {
+          const pathName = new URL(unwrapProxyUrl(candidate), currentUrl).pathname;
+          return /\/(?:login|log-in|signin|sign-in|auth)(?:\/|$)/i.test(pathName);
+        } catch (e) {
+          return false;
+        }
+      };
+      const isAuthenticationStep = (step: any) => {
+        const identity = `${step.elementName || ''} ${step.selector || ''} ${step.locator?.primary?.value || ''}`;
+        return Boolean(
+          step.masked ||
+          isAuthenticationUrl(step.url) ||
+          (step.action === 'navigate' && isAuthenticationUrl(step.value)) ||
+          /password|passcode|otp|sign\s*in|signin|log\s*in|login/i.test(identity)
+        );
+      };
+
       // Notify client immediately that target page and browser session are fully ready
       sendEvent('session_ready', {
         initialUrl: page.url() || currentUrl,
@@ -5761,6 +5827,11 @@ async function startServer() {
         const stepStartTime = Date.now();
         let stepPassed = true;
         let stepError = '';
+        let visualFallback = false;
+        // Saved storage is not proof that authentication succeeded (many sites
+        // write consent/analytics storage on the login page). Only skip replaying
+        // credentials when the restored browser actually landed beyond auth.
+        const visualOnlyAuthStep = hasRestoredWebSession && !isAuthenticationUrl(page.url()) && isAuthenticationStep(step);
 
         let stepInteractRes: any = null;
 
@@ -5776,41 +5847,18 @@ async function startServer() {
           // Ensure page is completely ready and fully loaded before performing step
           await ensurePageFullyReady(page, 10000);
 
-          if (action === 'navigate') {
+          if (visualOnlyAuthStep) {
+            // The final recording state is already authenticated. Re-submitting
+            // credentials can invalidate sessions or trigger MFA; retain the
+            // recorded step in the timeline without sending it to the website.
+            console.log(`[Playback Engine] Visual-only recorded authentication step ${i + 1}: ${action}`);
+          } else if (action === 'navigate') {
             const targetNav = resolveCandidateNavUrl(step, currentUrl) || resolveFullStepUrl(step.url, currentUrl) || resolveFullStepUrl(value, currentUrl) || step.url || value || currentUrl;
             if (targetNav) {
               currentUrl = await safeNavigatePage(targetNav);
             }
           } else if (['click', 'dblclick', 'fill', 'type', 'select', 'selectOption', 'check', 'uncheck', 'hover', 'focus', 'clear', 'scroll'].includes(action)) {
-            // Check if step was recorded on a different page and the browser has not navigated there yet
-            const stepRecordedUrl = resolveFullStepUrl(step.url, currentUrl) || resolveCandidateNavUrl(step, currentUrl);
-            if (stepRecordedUrl && /^https?:\/\//i.test(stepRecordedUrl)) {
-              const currentP = page.url() || '';
-              try {
-                const parsedCurrent = new URL(currentP);
-                const parsedRecorded = new URL(stepRecordedUrl);
-                const isDifferentPage = parsedCurrent.origin !== parsedRecorded.origin || 
-                  (parsedCurrent.pathname !== parsedRecorded.pathname && !parsedCurrent.pathname.endsWith(parsedRecorded.pathname) && !parsedRecorded.pathname.endsWith(parsedCurrent.pathname));
-                if (isDifferentPage) {
-                  console.log(`[Playback Engine] Multi-page sync: Navigating to step recorded page: ${stepRecordedUrl}`);
-                  currentUrl = await safeNavigatePage(stepRecordedUrl);
-                }
-              } catch (e) {}
-            }
-
             let res = await findAndInteractElement(page, step, action, value);
-
-            // If element was not found, attempt URL synchronization as fallback before failing
-            if (!res.success && step.url) {
-              const fallbackUrl = resolveFullStepUrl(step.url, currentUrl);
-              if (fallbackUrl && /^https?:\/\//i.test(fallbackUrl) && fallbackUrl !== page.url()) {
-                console.log(`[Playback Engine] Element interaction retry: Synchronizing page to recorded URL: ${fallbackUrl}`);
-                try {
-                  currentUrl = await safeNavigatePage(fallbackUrl);
-                  res = await findAndInteractElement(page, step, action, value);
-                } catch (syncErr) {}
-              }
-            }
 
             stepInteractRes = res;
             if (!res.success) {
@@ -5850,17 +5898,43 @@ async function startServer() {
             await page.waitForURL(url => url.toString() !== urlBeforeAction, { timeout: 4000 }).catch(() => {});
             await ensurePageFullyReady(page, 8000);
           }
+
+          if (action === 'navigate') {
+            const expectedUrl = resolveCandidateNavUrl(step, urlBeforeAction) || resolveFullStepUrl(value, urlBeforeAction);
+            if (expectedUrl && !isAuthenticationUrl(expectedUrl) && isAuthenticationUrl(page.url())) {
+              if (step.screenshot) {
+                visualFallback = true;
+                stepPassed = true;
+                stepError = 'Live session redirected to login; showing recorded performed-step evidence.';
+              } else {
+                stepPassed = false;
+                stepError = `Expected ${expectedUrl}, but playback was redirected to ${page.url()}.`;
+              }
+            }
+          }
         } catch (stepException: any) {
           stepPassed = false;
           stepError = stepException.message || 'Step execution error.';
         }
 
-        const resultingUrl = page.url() || currentUrl;
+        if (!stepPassed && step.screenshot && isAuthenticationUrl(page.url())) {
+          const evidenceUrl = resolveFullStepUrl(step.url, currentUrl) || resolveCandidateNavUrl(step, currentUrl);
+          if (evidenceUrl && !isAuthenticationUrl(evidenceUrl)) {
+            visualFallback = true;
+            stepPassed = true;
+            stepError = 'Live authenticated session expired; showing recorded performed-step evidence.';
+          }
+        }
+
+        const evidenceResultUrl = resolveCandidateNavUrl(step, currentUrl) || resolveFullStepUrl(step.url, currentUrl);
+        const resultingUrl = visualFallback && evidenceResultUrl ? evidenceResultUrl : (page.url() || currentUrl);
         currentUrl = resultingUrl;
         const pageTitle = await page.title().catch(() => '');
 
         let screenshotBase64 = '';
-        try {
+        if ((visualOnlyAuthStep || visualFallback) && step.screenshot) {
+          screenshotBase64 = step.screenshot;
+        } else try {
           const shotBuf = await page.screenshot({ type: 'jpeg', quality: 50, fullPage: false, timeout: 1500, animations: 'disabled' });
           screenshotBase64 = `data:image/jpeg;base64,${shotBuf.toString('base64')}`;
         } catch (shotErr) {
@@ -5883,6 +5957,8 @@ async function startServer() {
           pageTitle,
           screenshot: screenshotBase64,
           redirectChain: redirectLog.slice(-2),
+          visualOnly: visualOnlyAuthStep,
+          visualFallback,
           coordinates: stepInteractRes?.coordinates || (typeof step.x === 'number' && typeof step.y === 'number' ? { x: step.x, y: step.y } : null),
           targetBox: stepInteractRes?.targetBox || step.targetBox || null
         };

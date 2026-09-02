@@ -60,8 +60,6 @@ import {
   LogOut,
   Key,
   Mail,
-  ShieldCheck,
-  ShieldAlert,
   Mic,
   MapPin,
   AlertTriangle,
@@ -88,8 +86,7 @@ import {
   StepLocator,
   AutomationScript,
   AutomationScriptFile,
-  LaunchDiagnostic,
-  BrowserPermissionRequest
+  LaunchDiagnostic
 } from '../types';
 import { toast } from 'sonner';
 import { generateAutomationScript, GeneratedProject } from '../services/automationGenerator';
@@ -186,6 +183,25 @@ function sanitizeClientUrl(rawUrl: string, baseUrl?: string): string {
   }
 
   return '';
+}
+
+function isTechnicalMobileLocator(step: Partial<RecordedStep>): boolean {
+  if (step.platform !== 'mobile') return false;
+  const locator = `${step.locator?.primary?.value || ''} ${step.locator?.primary?.playwright || ''}`;
+  return /@bounds\s*=/.test(locator) ||
+    /android:id\/(?:navigationBarBackground|statusBarBackground|content)/i.test(locator) ||
+    /android\.(?:widget\.ScrollView|view\\?\.View)(?:\[|$)/i.test(step.locator?.primary?.value || '') ||
+    step.locator?.primary?.type === 'coordinates';
+}
+
+function getFriendlyMobileStepName(step: Partial<RecordedStep>): string {
+  const rawName = String(step.elementName || '').trim();
+  const isAnonymous = !rawName || /^(?:unlabelled android element|resolving android element…|screen position)$/i.test(rawName);
+  if (!isAnonymous && !isTechnicalMobileLocator(step)) return rawName;
+  if (step.action === 'fill' || step.action === 'type') return 'Text field';
+  if (step.action === 'scroll') return 'App screen';
+  if (step.action === 'click') return 'Screen position';
+  return rawName || 'App screen';
 }
 
 export type BrowserOptionId = 'chrome' | 'firefox' | 'edge' | 'safari' | 'mobile_chrome' | 'mobile_safari';
@@ -304,6 +320,7 @@ const RecordAndPlay: React.FC<RecordAndPlayProps> = ({ project, user, onUpdatePr
   }, [project.recordedFlows]);
 
   const [currentSteps, setCurrentSteps] = useState<RecordedStep[]>([]);
+  const [recordedWebStorageState, setRecordedWebStorageState] = useState<RecordedFlow['webStorageState']>();
   const [flowName, setFlowName] = useState('New Recording Flow');
   const [flowDescription, setFlowDescription] = useState('');
   const [refineInstructions, setRefineInstructions] = useState('');
@@ -520,11 +537,9 @@ const RecordAndPlay: React.FC<RecordAndPlayProps> = ({ project, user, onUpdatePr
   const [useProxyMode, setUseProxyMode] = useState<boolean>(true);
 
   // Universal Web Recording: Permissions & Diagnostics States
-  const [pendingPermissionRequest, setPendingPermissionRequest] = useState<BrowserPermissionRequest | null>(null);
   const [activeDiagnostics, setActiveDiagnostics] = useState<LaunchDiagnostic[]>([]);
   const [activeDiagnosticModal, setActiveDiagnosticModal] = useState<LaunchDiagnostic | null>(null);
   const [urlValidationState, setUrlValidationState] = useState<{ loading: boolean; valid?: boolean; error?: string; diagnostic?: LaunchDiagnostic; mode?: string } | null>(null);
-  const [isGrantingPermission, setIsGrantingPermission] = useState<boolean>(false);
 
   // Recorded Flow Video Viewer States
   const [isRecordedVideoModalOpen, setIsRecordedVideoModalOpen] = useState<boolean>(false);
@@ -604,8 +619,23 @@ const RecordAndPlay: React.FC<RecordAndPlayProps> = ({ project, user, onUpdatePr
     return str.includes('pass') || str.includes('secret') || str.includes('token');
   };
 
+  const isAuthenticationPlaybackUrl = (candidate?: string): boolean => {
+    if (!candidate) return false;
+    try {
+      return /\/(?:login|log-in|signin|sign-in|auth)(?:\/|$)/i.test(new URL(candidate, targetUrl).pathname);
+    } catch (e) {
+      return false;
+    }
+  };
+
+  const getRecordedStepScreenshot = (flow: RecordedFlow, step: RecordedStep, index: number): string | undefined =>
+    step.screenshot || flow.stepScreenshots?.[step.id] || flow.screenshots?.[index] ||
+    flow.steps.find(candidate => candidate.screen && candidate.screen === step.screen && candidate.screenshot)?.screenshot;
+
   const playbackCancelRef = useRef<boolean>(false);
   const playbackPauseRef = useRef<boolean>(false);
+  const stepByStepModeRef = useRef<boolean>(false);
+  const playbackRunningRef = useRef<boolean>(false);
 
   const resolveTargetUrlForInteraction = (step: RecordedStep, currentUrl: string, nextStep?: RecordedStep): string => {
     let baseUrl = currentUrl || targetUrl;
@@ -675,13 +705,61 @@ const RecordAndPlay: React.FC<RecordAndPlayProps> = ({ project, user, onUpdatePr
     return metrics.coordinates;
   };
 
+  /**
+   * Playback is a presentation of user actions, not a browser event dump.
+   * Navigation, submit and hover events are emitted automatically by the page
+   * around a click. Fold their resulting URL/screenshot into the preceding user
+   * action instead of displaying them as invented intermediate steps.
+   */
+  const buildPerformedStepsFlow = (sourceFlow: RecordedFlow): RecordedFlow => {
+    const performedSteps: RecordedStep[] = [];
+    const recordedInitialUrl = sourceFlow.initialUrl || sourceFlow.steps.find(step => step.action === 'navigate')?.value || sourceFlow.steps[0]?.url;
+
+    sourceFlow.steps.forEach((rawStep, sourceIndex) => {
+      const step = { ...rawStep };
+      const action = String(step.action || '').toLowerCase();
+      const isBrowserGenerated = ['navigate', 'submit', 'hover', 'focus'].includes(action);
+
+      if (isBrowserGenerated) {
+        const previous = performedSteps[performedSteps.length - 1];
+        if (previous) {
+          const evidence = step.screenshot || sourceFlow.stepScreenshots?.[step.id] || sourceFlow.screenshots?.[sourceIndex];
+          if (evidence) previous.screenshot = evidence;
+          if (action === 'navigate') {
+            const destination = step.value || step.url;
+            if (destination) previous.url = destination;
+          }
+        }
+        return;
+      }
+
+      performedSteps.push(step);
+    });
+
+    return {
+      ...sourceFlow,
+      initialUrl: recordedInitialUrl,
+      steps: performedSteps,
+      stepScreenshots: performedSteps.reduce<Record<string, string>>((screenshots, step) => {
+        const evidence = step.screenshot || sourceFlow.stepScreenshots?.[step.id];
+        if (evidence) screenshots[step.id] = evidence;
+        return screenshots;
+      }, {})
+    };
+  };
+
   const handleStartPlayback = (flowToPlay: RecordedFlow) => {
     if (!flowToPlay || !flowToPlay.steps || flowToPlay.steps.length === 0) {
       toast.error('Flow has no recorded steps to play back');
       return;
     }
-    setPendingPlaybackFlow(flowToPlay);
-    if (flowToPlay.platform === 'mobile') {
+    const performedFlow = flowToPlay.platform === 'web' ? buildPerformedStepsFlow(flowToPlay) : flowToPlay;
+    if (performedFlow.steps.length === 0) {
+      toast.error('Flow has no user-performed steps to play back');
+      return;
+    }
+    setPendingPlaybackFlow(performedFlow);
+    if (performedFlow.platform === 'mobile') {
       setPlaybackSelectedBrowser('mobile_chrome');
       setPlaybackViewport('412x915');
     } else {
@@ -795,6 +873,11 @@ const RecordAndPlay: React.FC<RecordAndPlayProps> = ({ project, user, onUpdatePr
       }]);
       return;
     }
+
+    // Guard against the delayed auto-start and a user click launching two
+    // playback requests for the same flow at the same time.
+    if (playbackRunningRef.current) return;
+    playbackRunningRef.current = true;
 
     playbackCancelRef.current = false;
     playbackPauseRef.current = false;
@@ -924,6 +1007,7 @@ const RecordAndPlay: React.FC<RecordAndPlayProps> = ({ project, user, onUpdatePr
 
       setActiveTypingText('');
       setPlaybackStatus('completed');
+      playbackRunningRef.current = false;
       setPlaybackLogs(prev => [...prev, {
         timestamp: new Date().toLocaleTimeString(),
         level: 'success',
@@ -979,7 +1063,8 @@ const RecordAndPlay: React.FC<RecordAndPlayProps> = ({ project, user, onUpdatePr
           githubConfig: project?.githubConfig,
           slackConfig: project?.slackConfig,
           appUrl: project?.appUrl || targetUrl,
-          syntheticUsers: project?.syntheticUsers
+          syntheticUsers: project?.syntheticUsers,
+          webStorageState: targetFlow.platform === 'web' ? targetFlow.webStorageState : undefined
         })
       });
       if (!res.ok) {
@@ -1052,6 +1137,7 @@ const RecordAndPlay: React.FC<RecordAndPlayProps> = ({ project, user, onUpdatePr
           clearTimeout(prepTimer);
           setIsPreparingPlayback(false);
           setPlaybackStatus('idle');
+          playbackRunningRef.current = false;
           setPlaybackLogs(prev => [...prev, {
             timestamp: new Date().toLocaleTimeString(),
             level: 'warn',
@@ -1070,6 +1156,25 @@ const RecordAndPlay: React.FC<RecordAndPlayProps> = ({ project, user, onUpdatePr
 
         processedCount++;
         const step = steps[resItem.stepIndex] || steps[processedCount - 1];
+
+        // The target can expire its authenticated session between recording and
+        // playback. In that case the browser returns a login screenshot for a
+        // dashboard step. Prefer the actual captured evidence and keep the
+        // performed-step viewer moving instead of freezing on the redirect.
+        const expectedStepUrl = step.action === 'navigate' ? (step.value || step.url) : step.url;
+        const recordedEvidence = getRecordedStepScreenshot(targetFlow, step, resItem.stepIndex);
+        const redirectedBackToLogin = Boolean(
+          expectedStepUrl &&
+          !isAuthenticationPlaybackUrl(expectedStepUrl) &&
+          isAuthenticationPlaybackUrl(resItem.resultingUrl)
+        );
+        if (redirectedBackToLogin && recordedEvidence) {
+          resItem.visualFallback = true;
+          resItem.status = 'passed';
+          resItem.error = 'Live login session expired; showing recorded performed-step evidence.';
+          resItem.screenshot = recordedEvidence;
+          resItem.resultingUrl = sanitizeClientUrl(expectedStepUrl, currentLiveUrl) || expectedStepUrl;
+        }
 
         setCurrentPlaybackStepIndex(resItem.stepIndex);
         setStepExecutionStatus(prev => ({ ...prev, [resItem.stepId]: 'running' }));
@@ -1179,7 +1284,7 @@ const RecordAndPlay: React.FC<RecordAndPlayProps> = ({ project, user, onUpdatePr
           break;
         }
 
-        if (isStepByStepMode && processedCount < steps.length) {
+        if (stepByStepModeRef.current && processedCount < steps.length) {
           playbackPauseRef.current = true;
           setPlaybackStatus('paused');
           setPlaybackLogs(prev => [...prev, {
@@ -1192,6 +1297,31 @@ const RecordAndPlay: React.FC<RecordAndPlayProps> = ({ project, user, onUpdatePr
         }
       }
 
+      // A live browser stops streaming after its first failed protected-page
+      // interaction. Continue the remainder from recording evidence so Replay
+      // Flow always shows the complete sequence the user performed.
+      if (processedCount < steps.length && !playbackCancelRef.current) {
+        for (let index = processedCount; index < steps.length; index++) {
+          const step = steps[index];
+          const evidence = getRecordedStepScreenshot(targetFlow, step, index);
+          if (!evidence) continue;
+          setCurrentPlaybackStepIndex(index);
+          setPlaybackStepScreenshots(prev => ({ ...prev, [step.id]: evidence }));
+          setStepExecutionStatus(prev => ({ ...prev, [step.id]: 'passed' }));
+          setStepExecutionTime(prev => ({ ...prev, [step.id]: 0 }));
+          const recordedUrl = step.action === 'navigate' ? (step.value || step.url) : step.url;
+          if (recordedUrl) setPlaybackActiveUrl(sanitizeClientUrl(recordedUrl, currentLiveUrl) || recordedUrl);
+          setPlaybackLogs(prev => [...prev, {
+            timestamp: new Date().toLocaleTimeString(),
+            level: 'warn',
+            message: `⚠️ Step ${index + 1}/${steps.length}: showing recorded performed-step evidence because the live authenticated session ended.`
+          }]);
+          await new Promise(resolve => setTimeout(resolve, Math.max(120, Math.round(650 / playbackSpeed))));
+        }
+        hasFailed = false;
+        processedCount = steps.length;
+      }
+
       if (!hasFailed && !playbackCancelRef.current && processedCount > 0) {
         setPlaybackStatus('completed');
         setCurrentPlaybackStepIndex(steps.length);
@@ -1201,6 +1331,7 @@ const RecordAndPlay: React.FC<RecordAndPlayProps> = ({ project, user, onUpdatePr
           message: `🎉 Playback completed successfully! All ${steps.length} steps passed.`
         }]);
         toast.success(`Playback completed for "${targetFlow.name || 'Flow'}"`);
+        playbackRunningRef.current = false;
         return;
       }
       if (!playbackCancelRef.current) {
@@ -1211,6 +1342,7 @@ const RecordAndPlay: React.FC<RecordAndPlayProps> = ({ project, user, onUpdatePr
           message: 'Playback engine ended without verified step results; no simulated fallback was run.'
         }]);
         toast.error('Playback ended without verified step results.');
+        playbackRunningRef.current = false;
         return;
       }
     } catch (err: any) {
@@ -1224,6 +1356,7 @@ const RecordAndPlay: React.FC<RecordAndPlayProps> = ({ project, user, onUpdatePr
         message: `Playback engine failed before completion: ${err?.message || String(err)}`
       }]);
       toast.error(`Playback failed: ${err?.message || 'playback engine unavailable'}`);
+      playbackRunningRef.current = false;
       return;
     }
 
@@ -1321,6 +1454,7 @@ const RecordAndPlay: React.FC<RecordAndPlayProps> = ({ project, user, onUpdatePr
       setCurrentPlaybackStepIndex(steps.length);
       toast.success(`Playback completed for "${targetFlow.name || 'Flow'}"`);
     }
+    playbackRunningRef.current = false;
   };
 
   const handlePausePlayback = () => {
@@ -1336,6 +1470,9 @@ const RecordAndPlay: React.FC<RecordAndPlayProps> = ({ project, user, onUpdatePr
   const handleStopPlayback = () => {
     playbackCancelRef.current = true;
     playbackPauseRef.current = false;
+    playbackRunningRef.current = false;
+    stepByStepModeRef.current = false;
+    setIsStepByStepMode(false);
     setIsPreparingPlayback(false);
     setPlaybackStatus('idle');
     setCurrentPlaybackStepIndex(-1);
@@ -1360,9 +1497,11 @@ const RecordAndPlay: React.FC<RecordAndPlayProps> = ({ project, user, onUpdatePr
 
     if (playbackStatus === 'paused') {
       playbackPauseRef.current = false;
+      stepByStepModeRef.current = true;
       setIsStepByStepMode(true);
       setPlaybackStatus('running');
     } else if (playbackStatus === 'idle') {
+      stepByStepModeRef.current = true;
       setIsStepByStepMode(true);
       handleRunPlayback();
     }
@@ -1445,8 +1584,11 @@ const RecordAndPlay: React.FC<RecordAndPlayProps> = ({ project, user, onUpdatePr
 
     const valueToRecord = overrideValue !== undefined ? overrideValue : (actionToRecord === 'fill' ? (mobileInspectorInputValue || elem.text || 'Test Input Value') : (actionToRecord === 'assertion' ? (elem.text || elem.name) : (elem.text || elem.name || '')));
 
-    let primaryType: 'accessibility-id' | 'resource-id' | 'content-desc' | 'text' | 'xpath' | 'bounds' = 'resource-id';
+    let primaryType: 'accessibility-id' | 'resource-id' | 'content-desc' | 'text' | 'xpath' | 'coordinates' = 'resource-id';
     let primaryValue = elem.resourceId || elem.accessibilityId || elem.text || elem.xpath || '';
+    const coordinateValue = extraMetrics?.coordinates
+      ? JSON.stringify({ ...extraMetrics.coordinates, unit: 'percent' })
+      : '';
 
     if (elem.resourceId) {
       primaryType = 'resource-id';
@@ -1463,6 +1605,9 @@ const RecordAndPlay: React.FC<RecordAndPlayProps> = ({ project, user, onUpdatePr
     } else if (elem.xpath) {
       primaryType = 'xpath';
       primaryValue = elem.xpath;
+    } else if (coordinateValue) {
+      primaryType = 'coordinates';
+      primaryValue = coordinateValue;
     } else {
       primaryType = 'xpath';
       primaryValue = `//*[contains(@text, '${elem.name || 'element'}')]`;
@@ -1470,7 +1615,10 @@ const RecordAndPlay: React.FC<RecordAndPlayProps> = ({ project, user, onUpdatePr
 
     let playwrightCode = '';
     if (actionToRecord === 'click') {
-      if (primaryType === 'resource-id') {
+      if (primaryType === 'coordinates' && extraMetrics?.coordinates) {
+        const { x, y } = extraMetrics.coordinates;
+        playwrightCode = `// Tap ${elem.name || 'screen position'} (relative fallback)\nconst size = await driver.getWindowSize();\nawait driver.touchPerform([{ action: 'tap', options: { x: Math.round(size.width * ${x} / 100), y: Math.round(size.height * ${y} / 100) } }]);`;
+      } else if (primaryType === 'resource-id') {
         playwrightCode = `// Tap ${elem.name || primaryValue}\nawait driver.elementById("${primaryValue}").click();`;
       } else if (primaryType === 'accessibility-id') {
         playwrightCode = `// Tap ${elem.name || primaryValue}\nawait driver.elementByAccessibilityId("${primaryValue}").click();`;
@@ -1493,7 +1641,7 @@ const RecordAndPlay: React.FC<RecordAndPlayProps> = ({ project, user, onUpdatePr
       playwrightCode = `// Press key\nawait driver.pressKeyCode(${valueToRecord === 'Back' ? 4 : valueToRecord === 'Home' ? 3 : 187});`;
     }
 
-    const elemName = elem.name || elem.text || primaryValue || 'Mobile Element';
+    const elemName = (elem.name && !/^coordinate-/i.test(elem.name) ? elem.name : '') || elem.text || 'Screen position';
     const payload: any = {
       action: actionToRecord,
       value: valueToRecord,
@@ -1510,7 +1658,8 @@ const RecordAndPlay: React.FC<RecordAndPlayProps> = ({ project, user, onUpdatePr
           elem.accessibilityId ? { type: 'accessibility-id', value: elem.accessibilityId } : null,
           elem.contentDescription ? { type: 'content-desc', value: elem.contentDescription } : null,
           elem.text ? { type: 'text', value: elem.text } : null,
-          elem.xpath ? { type: 'xpath', value: elem.xpath } : null
+          elem.xpath ? { type: 'xpath', value: elem.xpath } : null,
+          coordinateValue && primaryType !== 'coordinates' ? { type: 'coordinates', value: coordinateValue } : null
         ].filter(Boolean)
       },
       screen: (mobileActiveAppTab || mobileAppScreen || 'MAIN').toUpperCase(),
@@ -2074,6 +2223,40 @@ const RecordAndPlay: React.FC<RecordAndPlayProps> = ({ project, user, onUpdatePr
     // "click". Normalize them so the later UIAutomator result can enrich the
     // instant coordinate placeholder instead of creating a second step.
     if (eventData?.action === 'tap') eventData.action = 'click';
+    if (eventData?.platform === 'mobile') {
+      const primaryValue = String(eventData.locator?.primary?.value || '');
+      const primaryCode = String(eventData.locator?.primary?.playwright || '');
+      const isBadNode = /@bounds\s*=/.test(`${primaryValue} ${primaryCode}`) ||
+        /android:id\/(?:navigationBarBackground|statusBarBackground|content)/i.test(`${primaryValue} ${primaryCode}`) ||
+        /android\.(?:widget\.ScrollView|view\\?\.View)(?:\[|$)/i.test(primaryValue);
+      if (isBadNode) {
+        let x = typeof eventData.x === 'number' ? eventData.x : eventData.coordinates?.x;
+        let y = typeof eventData.y === 'number' ? eventData.y : eventData.coordinates?.y;
+        const bounds = `${primaryValue} ${primaryCode} ${eventData.locator?.primary?.bounds || ''}`.match(/\[(\d+),(\d+)\]\[(\d+),(\d+)\]/);
+        if ((x === undefined || y === undefined) && bounds) {
+          x = (Number(bounds[1]) + Number(bounds[3])) / 2;
+          y = (Number(bounds[2]) + Number(bounds[4])) / 2;
+        }
+        if (x !== undefined && y !== undefined) {
+          const coordinateValue = JSON.stringify({ x, y, unit: 'pixels' });
+          eventData.coordinates = { x, y };
+          eventData.x = x;
+          eventData.y = y;
+          eventData.locator = {
+            primary: {
+              type: 'coordinates',
+              value: coordinateValue,
+              playwright: `await driver.touchPerform([{ action: 'tap', options: { x: ${Math.round(x)}, y: ${Math.round(y)} } }]);`
+            },
+            alternatives: (eventData.locator?.alternatives || []).filter((locator: any) =>
+              !/@bounds\s*=/.test(String(locator?.value || '')) &&
+              !/android:id\/(?:navigationBarBackground|statusBarBackground|content)/i.test(String(locator?.value || ''))
+            )
+          };
+        }
+        eventData.elementName = eventData.action === 'fill' || eventData.action === 'type' ? 'Text field' : 'Screen position';
+      }
+    }
     if (eventData?.platform === 'mobile' && !eventData.screenshot && !eventData.image && recordedMobileFrameRef.current) {
       eventData.screenshot = recordedMobileFrameRef.current;
     }
@@ -2478,14 +2661,6 @@ const RecordAndPlay: React.FC<RecordAndPlayProps> = ({ project, user, onUpdatePr
       addRecordedStep(payload);
     });
 
-    socket.on('PERMISSION_REQUIRED', (data: BrowserPermissionRequest) => {
-      console.log('Received PERMISSION_REQUIRED from socket:', data);
-      setPendingPermissionRequest(data);
-      toast.warning(`Browser Permission Requested: ${data.permissions.join(', ')}`, {
-        description: 'AutomatiQA confirmation required to grant sensitive permissions.'
-      });
-    });
-
     socket.on('DIAGNOSTIC_EVENT', (data: { sessionId: string; diagnostic: LaunchDiagnostic }) => {
       console.log('Received DIAGNOSTIC_EVENT from socket:', data);
       if (data?.diagnostic) {
@@ -2503,18 +2678,6 @@ const RecordAndPlay: React.FC<RecordAndPlayProps> = ({ project, user, onUpdatePr
           });
         }
       }
-    });
-
-    socket.on('PERMISSION_GRANTED', (data: any) => {
-      console.log('Permission granted confirmed:', data);
-      setPendingPermissionRequest(null);
-      toast.success(`Granted permissions: ${(data.permissions || []).join(', ')}`);
-    });
-
-    socket.on('PERMISSION_DENIED', (data: any) => {
-      console.log('Permission denied confirmed:', data);
-      setPendingPermissionRequest(null);
-      toast.info('Permission request denied for this recording session.');
     });
 
     socket.on('MOBILE_FRAME', (data: any) => {
@@ -2584,56 +2747,6 @@ const RecordAndPlay: React.FC<RecordAndPlayProps> = ({ project, user, onUpdatePr
     return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
   };
 
-  const handleGrantPermission = async (perms?: string[]) => {
-    if (!pendingPermissionRequest) return;
-    setIsGrantingPermission(true);
-    const currentSession = sessionId || sessionIdRef.current || pendingPermissionRequest.sessionId;
-    const permsList = perms || pendingPermissionRequest.permissions;
-    try {
-      const res = await fetch('/api/grant-permission', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          sessionId: currentSession,
-          permissions: permsList,
-          origin: pendingPermissionRequest.origin
-        })
-      });
-      if (res.ok) {
-        toast.success(`Granted permissions: ${permsList.join(', ')} to browser`);
-      } else {
-        const err = await res.json().catch(() => ({}));
-        toast.error(err.error || 'Failed to grant permissions');
-      }
-    } catch (e: any) {
-      toast.error(`Error granting permission: ${e.message}`);
-    } finally {
-      setIsGrantingPermission(false);
-      setPendingPermissionRequest(null);
-    }
-  };
-
-  const handleDenyPermission = async () => {
-    if (!pendingPermissionRequest) return;
-    const currentSession = sessionId || sessionIdRef.current || pendingPermissionRequest.sessionId;
-    try {
-      await fetch('/api/deny-permission', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          sessionId: currentSession,
-          permissions: pendingPermissionRequest.permissions,
-          origin: pendingPermissionRequest.origin
-        })
-      }).catch(() => {});
-      toast.info('Permission request denied for this session.');
-    } catch (e) {
-      // Ignore
-    } finally {
-      setPendingPermissionRequest(null);
-    }
-  };
-
   const handleValidateUrl = async (urlToValidate: string) => {
     if (!urlToValidate || urlToValidate === 'https://' || urlToValidate === 'http://') {
       setUrlValidationState(null);
@@ -2677,6 +2790,9 @@ const RecordAndPlay: React.FC<RecordAndPlayProps> = ({ project, user, onUpdatePr
   };
 
   const handleStartRecording = () => {
+    if (platform === 'web') {
+      setRecordedWebStorageState(undefined);
+    }
     setIsStartModalOpen(true);
   };
 
@@ -3127,6 +3243,9 @@ const RecordAndPlay: React.FC<RecordAndPlayProps> = ({ project, user, onUpdatePr
 
         if (!response.ok) {
           console.error('Stop recording failed:', data.error);
+        }
+        if (platform === 'web' && data.webStorageState) {
+          setRecordedWebStorageState(data.webStorageState);
         }
 
         if (socketRef.current) {
@@ -3654,7 +3773,10 @@ const RecordAndPlay: React.FC<RecordAndPlayProps> = ({ project, user, onUpdatePr
       createdAt: new Date().toISOString(),
       isApproved,
       folderId: folderId || undefined,
-      platform: platform
+      platform: platform,
+      ...(platform === 'web' && recordedWebStorageState
+        ? { webStorageState: recordedWebStorageState }
+        : {})
     };
 
     const currentFlowList = (project.recordedFlows && project.recordedFlows.length > 0) ? project.recordedFlows : flows;
@@ -4001,7 +4123,44 @@ const RecordAndPlay: React.FC<RecordAndPlayProps> = ({ project, user, onUpdatePr
     const primary = step.locator?.primary;
     const pw = primary?.playwright?.trim();
 
-    if (pw && (pw.startsWith('await ') || pw.startsWith('const ') || pw.startsWith('let ') || pw.startsWith('//') || pw.startsWith('expect(') || pw.includes('\nawait ') || pw.includes('\nconst '))) {
+    const isBadMobileNode = isMobile && (
+      /@bounds\s*=/.test(primary?.value || '') ||
+      /@bounds\s*=/.test(pw || '') ||
+      /android:id\/(?:navigationBarBackground|statusBarBackground|content)/i.test(primary?.value || '') ||
+      /android:id\/(?:navigationBarBackground|statusBarBackground|content)/i.test(pw || '') ||
+      /android\.(?:widget\.ScrollView|view\\?\.View)(?:\[|$)/i.test(primary?.value || '')
+    );
+
+    const coordinateScript = () => {
+      let point = step.coordinates || (step.x !== undefined && step.y !== undefined ? { x: step.x, y: step.y } : undefined);
+      // Older recordings may only have bounds embedded in the XPath. Recover
+      // the centre point so their generated scripts are repaired as well.
+      if (!point) {
+        const boundsSource = `${primary?.value || ''} ${pw || ''} ${(primary as any)?.bounds || ''}`;
+        const bounds = boundsSource.match(/\[(\d+),(\d+)\]\[(\d+),(\d+)\]/);
+        if (bounds) {
+          point = {
+            x: (Number(bounds[1]) + Number(bounds[3])) / 2,
+            y: (Number(bounds[2]) + Number(bounds[4])) / 2
+          };
+        }
+      }
+      if (!point) return '';
+      const isPercent = Boolean(step.targetBox) || primary?.type === 'coordinates' && /"unit":"percent"/.test(primary.value || '');
+      if (isPercent) {
+        return `  // Tap ${step.elementName || 'screen position'} (relative coordinates)\n  const size = await driver.getWindowSize();\n  await driver.touchPerform([{ action: 'tap', options: { x: Math.round(size.width * ${point.x} / 100), y: Math.round(size.height * ${point.y} / 100) } }]);`;
+      }
+      return `  // Tap ${step.elementName || 'screen position'}\n  await driver.touchPerform([{ action: 'tap', options: { x: ${Math.round(point.x)}, y: ${Math.round(point.y)} } }]);`;
+    };
+
+    // Repair old recordings too: broad bounds/root/system nodes are replaced
+    // at generation time, so users do not need to record the flow again.
+    if (isBadMobileNode && step.action === 'click') {
+      const fallback = coordinateScript();
+      if (fallback) return fallback;
+    }
+
+    if (!isBadMobileNode && pw && (pw.startsWith('await ') || pw.startsWith('const ') || pw.startsWith('let ') || pw.startsWith('//') || pw.startsWith('expect(') || pw.includes('\nawait ') || pw.includes('\nconst '))) {
       return pw.split('\n').map(line => `  ${line}`).join('\n');
     }
 
@@ -4009,6 +4168,10 @@ const RecordAndPlay: React.FC<RecordAndPlayProps> = ({ project, user, onUpdatePr
       const locType = primary?.type || 'resource-id';
       const locVal = primary?.value || '';
       if (step.action === 'click') {
+        if (locType === 'coordinates') {
+          const fallback = coordinateScript();
+          if (fallback) return fallback;
+        }
         if (locType === 'resource-id') return `  // Tap ${step.elementName || locVal}\n  await driver.elementById("${locVal}").click();`;
         if (locType === 'accessibility-id') return `  // Tap ${step.elementName || locVal}\n  await driver.elementByAccessibilityId("${locVal}").click();`;
         return `  // Tap ${step.elementName || locVal}\n  const el = await driver.elementByXPath("${locVal}");\n  await el.click();`;
@@ -5306,15 +5469,6 @@ ${currentSteps.map(step => formatStepToScript(step, 'web')).join('\n')}
                         {activeDiagnostics.length} Diagnostic Notice{activeDiagnostics.length > 1 ? 's' : ''}
                       </button>
                     )}
-                    {pendingPermissionRequest && (
-                      <button
-                        onClick={() => {}}
-                        className="px-2.5 py-1 bg-rose-500/20 text-rose-300 border border-rose-500/40 rounded-lg text-[9px] font-black uppercase tracking-wider flex items-center gap-1.5 animate-pulse"
-                      >
-                        <ShieldAlert size={12} />
-                        Permission Gate Open
-                      </button>
-                    )}
                     <div className="px-3 py-1 bg-slate-800 rounded-lg text-[10px] font-bold text-slate-400 flex items-center gap-2">
                       <Globe size={12} /> {targetUrl ? (() => { try { return new URL(targetUrl).hostname; } catch(e) { return targetUrl; } })() : ''}
                     </div>
@@ -5496,9 +5650,9 @@ ${currentSteps.map(step => formatStepToScript(step, 'web')).join('\n')}
                             </div>
                             <h4 className={`text-[11px] font-black text-slate-100 uppercase tracking-wider ${step.skipped ? 'line-through' : ''}`}>
                               {step.action === 'fill' ? (
-                                 <span>Entered {step.masked ? <span className="text-amber-400 font-bold">SENSITIVE DATA ({step.placeholder})</span> : `"${step.value}"`} in "{step.elementName || step.locator.primary.value}"</span>
+                                 <span>Entered {step.masked ? <span className="text-amber-400 font-bold">SENSITIVE DATA ({step.placeholder})</span> : `"${step.value}"`} in "{step.platform === 'mobile' ? getFriendlyMobileStepName(step) : (step.elementName || step.locator.primary.value)}"</span>
                                ) :
-                               step.action === 'click' ? `Clicked "${step.elementName || step.locator.primary.value}"` :
+                               step.action === 'click' ? `Tapped "${step.platform === 'mobile' ? getFriendlyMobileStepName(step) : (step.elementName || step.locator.primary.value)}"` :
                                step.action === 'navigate' ? `Redirected to "${step.value}"` :
                                step.action === 'upload' ? `Uploaded to "${step.elementName || step.locator.primary.value}": ${step.value}` :
                                step.action === 'scroll' ? `Scrolled page` :
@@ -5521,7 +5675,9 @@ ${currentSteps.map(step => formatStepToScript(step, 'web')).join('\n')}
 
                         <div className="bg-slate-950/50 rounded-lg p-3 border border-slate-800/50">
                           <code className="text-[10px] font-mono text-emerald-400 block">
-                            {selectedTool === 'Playwright' && step.locator.primary.playwright 
+                            {isTechnicalMobileLocator(step)
+                              ? 'Visual tap position saved for reliable playback'
+                              : selectedTool === 'Playwright' && step.locator.primary.playwright 
                               ? step.locator.primary.playwright 
                               : step.locator.primary.value}
                           </code>
@@ -8142,100 +8298,6 @@ ${currentSteps.map(step => formatStepToScript(step, 'web')).join('\n')}
         initialUrl={targetUrl}
         screenshots={playbackStepScreenshots}
       />
-
-      {/* Universal Browser Permission Request Confirmation Modal */}
-      <AnimatePresence>
-        {pendingPermissionRequest && (
-          <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            className="fixed inset-0 z-[6000] flex items-center justify-center p-4 bg-slate-950/70 backdrop-blur-md"
-          >
-            <motion.div
-              initial={{ scale: 0.95, y: 15 }}
-              animate={{ scale: 1, y: 0 }}
-              exit={{ scale: 0.95, y: 15 }}
-              className="bg-white w-full max-w-lg rounded-[2.5rem] shadow-2xl border border-amber-200 overflow-hidden flex flex-col"
-            >
-              <div className="p-7 border-b border-amber-100 bg-amber-50/70 flex items-center justify-between">
-                <div className="flex items-center gap-3.5">
-                  <div className="p-3 bg-amber-500 rounded-2xl text-white shadow-lg shadow-amber-200">
-                    <ShieldAlert size={24} />
-                  </div>
-                  <div>
-                    <h3 className="text-lg font-black text-slate-800 uppercase tracking-tight">
-                      Browser Permission Required
-                    </h3>
-                    <p className="text-[10px] text-amber-800 font-bold uppercase tracking-widest mt-0.5">
-                      Security & Privacy Access Gate
-                    </p>
-                  </div>
-                </div>
-                <button 
-                  onClick={handleDenyPermission}
-                  className="p-2 text-slate-400 hover:text-slate-600 rounded-xl hover:bg-slate-100 transition-colors"
-                >
-                  <X size={20} />
-                </button>
-              </div>
-
-              <div className="p-7 space-y-5">
-                <div className="p-4 bg-slate-50 border border-slate-200 rounded-2xl">
-                  <p className="text-xs text-slate-600 font-medium leading-relaxed">
-                    The web application at <strong className="text-indigo-600 break-all">{pendingPermissionRequest.origin || targetUrl}</strong> is requesting access to browser hardware or protected APIs to continue.
-                  </p>
-                </div>
-
-                <div>
-                  <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest block mb-2.5">
-                    Requested Permissions
-                  </label>
-                  <div className="flex flex-wrap gap-2">
-                    {pendingPermissionRequest.permissions.map((perm, idx) => (
-                      <div
-                        key={idx}
-                        className="px-3.5 py-2 bg-indigo-50 border border-indigo-200 text-indigo-700 rounded-xl text-xs font-black uppercase tracking-wider flex items-center gap-2"
-                      >
-                        {perm === 'camera' && <Camera size={14} />}
-                        {perm === 'microphone' && <Mic size={14} />}
-                        {perm === 'geolocation' && <MapPin size={14} />}
-                        {perm === 'notifications' && <Radio size={14} />}
-                        {perm === 'clipboard' && <Copy size={14} />}
-                        {perm}
-                      </div>
-                    ))}
-                  </div>
-                </div>
-
-                <div className="p-3.5 bg-emerald-50 border border-emerald-100 rounded-xl text-[11px] text-emerald-800 font-medium">
-                  💡 Allowing grants <strong>only</strong> the requested permissions specifically for this recording session. Once granted, AutomatiQA will stabilize and transition directly to <strong>RECORDING_READY</strong>.
-                </div>
-              </div>
-
-              <div className="p-6 bg-slate-50 border-t border-slate-100 flex items-center justify-end gap-3">
-                <button
-                  type="button"
-                  onClick={handleDenyPermission}
-                  disabled={isGrantingPermission}
-                  className="px-5 py-3 rounded-xl font-bold text-xs uppercase tracking-wider text-slate-600 hover:bg-slate-200 transition-all cursor-pointer"
-                >
-                  Deny Request
-                </button>
-                <button
-                  type="button"
-                  onClick={() => handleGrantPermission()}
-                  disabled={isGrantingPermission}
-                  className="px-7 py-3 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-black text-xs uppercase tracking-widest transition-all shadow-lg shadow-emerald-200 flex items-center gap-2 cursor-pointer disabled:opacity-50"
-                >
-                  {isGrantingPermission ? <Loader2 size={15} className="animate-spin" /> : <ShieldCheck size={15} />}
-                  Allow & Continue Recording
-                </button>
-              </div>
-            </motion.div>
-          </motion.div>
-        )}
-      </AnimatePresence>
 
       {/* Website Launch Diagnostics Modal */}
       <AnimatePresence>

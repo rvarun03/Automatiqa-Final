@@ -7944,10 +7944,2021 @@
       "timestamp": 1788156344193,
       "hits": 0,
       "executionTimeMs": 10885
+    },
+    {
+      "key": "2e8d862d0da8e9f531347a512c3c4c4be9bf1022432f0e2aa325af74b6c55a50",
+      "functionName": "enhanceRecordedScript",
+      "argsHash": "2e8d862d0da8e9f531347a512c3c4c4be9bf1022432f0e2aa325af74b6c55a50",
+      "result": {
+        "optimizedSteps": [
+          {
+            "id": "vlmmc9",
+            "action": "navigate",
+            "screen": "LoginPage",
+            "elementName": "Target Application Page",
+            "url": "",
+            "value": "https://app.kdksoftware.com/login",
+            "platform": "web",
+            "placeholder": "",
+            "locator": {
+              "primary": {
+                "type": "url",
+                "value": "https://app.kdksoftware.com/login",
+                "playwright": "await page.goto('https://app.kdksoftware.com/login');"
+              },
+              "alternatives": []
+            }
+          },
+          {
+            "id": "4z61wd",
+            "action": "click",
+            "screen": "LoginPage",
+            "elementName": "Enter mobile number",
+            "url": "",
+            "value": "",
+            "platform": "web",
+            "placeholder": "",
+            "locator": {
+              "primary": {
+                "type": "placeholder",
+                "value": "[placeholder=\"Enter mobile number\"]",
+                "playwright": "await page.getByPlaceholder('Enter mobile number').click()"
+              },
+              "alternatives": [
+                {
+                  "type": "placeholder",
+                  "value": "[placeholder=\"Enter mobile number\"]",
+                  "playwright": "page.getByPlaceholder('Enter mobile number')"
+                },
+                {
+                  "type": "label",
+                  "value": "label:has-text(\"Mobile Number\")",
+                  "playwright": "page.getByLabel('Mobile Number')"
+                },
+                {
+                  "type": "css",
+                  "value": "#mobile",
+                  "playwright": "page.locator('#mobile')"
+                }
+              ]
+            }
+          },
+          {
+            "id": "eyo2vq",
+            "action": "hover",
+            "screen": "LoginPage",
+            "elementName": "Enter mobile number",
+            "url": "",
+            "value": "",
+            "platform": "web",
+            "placeholder": "",
+            "locator": {
+              "primary": {
+                "type": "placeholder",
+                "value": "[placeholder=\"Enter mobile number\"]",
+                "playwright": "await page.getByPlaceholder('Enter mobile number').hover()"
+              },
+              "alternatives": [
+                {
+                  "type": "placeholder",
+                  "value": "[placeholder=\"Enter mobile number\"]",
+                  "playwright": "page.getByPlaceholder('Enter mobile number')"
+                },
+                {
+                  "type": "label",
+                  "value": "label:has-text(\"Mobile Number\")",
+                  "playwright": "page.getByLabel('Mobile Number')"
+                },
+                {
+                  "type": "css",
+                  "value": "#mobile",
+                  "playwright": "page.locator('#mobile')"
+                }
+              ]
+            }
+          },
+          {
+            "id": "n14dvb",
+            "action": "fill",
+            "screen": "LoginPage",
+            "elementName": "Enter mobile number",
+            "url": "",
+            "value": "111",
+            "platform": "web",
+            "placeholder": "",
+            "locator": {
+              "primary": {
+                "type": "placeholder",
+                "value": "[placeholder=\"Enter mobile number\"]",
+                "playwright": "await page.getByPlaceholder('Enter mobile number').fill('1')"
+              },
+              "alternatives": [
+                {
+                  "type": "placeholder",
+                  "value": "[placeholder=\"Enter mobile number\"]",
+                  "playwright": "page.getByPlaceholder('Enter mobile number')"
+                },
+                {
+                  "type": "label",
+                  "value": "label:has-text(\"Mobile Number\")",
+                  "playwright": "page.getByLabel('Mobile Number')"
+                },
+                {
+                  "type": "css",
+                  "value": "#mobile",
+                  "playwright": "page.locator('#mobile')"
+                }
+              ]
+            }
+          }
+        ],
+        "pomStructure": "// --- LoginPage Object ---\nclass LoginPage {\n  constructor(private page: Page) {}\n  // NAVIGATE: Target Application Page\n  async navigate_target_application_page() {\n    await page.goto('https://app.kdksoftware.com/login');\n  }\n\n  // CLICK: Enter mobile number\n  async click_enter_mobile_number() {\n    await page.getByPlaceholder('Enter mobile number').click()\n  }\n\n  // HOVER: Enter mobile number\n  async hover_enter_mobile_number() {\n    await page.getByPlaceholder('Enter mobile number').hover()\n  }\n\n  // FILL: Enter mobile number\n  async fill_enter_mobile_number() {\n    await page.getByPlaceholder('Enter mobile number').fill('1')\n  }\n}\n",
+        "suggestedTitle": "New Recording Flow - Enhanced Test Flow",
+        "explanation": "Successfully optimized 4 recorded steps into Page Object Model structure with clean locators."
+      },
+      "timestamp": 1788255682629,
+      "hits": 0,
+      "executionTimeMs": 12362
+    },
+    {
+      "key": "d833ea7aeaac9c49b8bcc557666d63bfe5f2a8eb62338706984e92ef51f560f1",
+      "functionName": "enhanceRecordedScript",
+      "argsHash": "d833ea7aeaac9c49b8bcc557666d63bfe5f2a8eb62338706984e92ef51f560f1",
+      "result": {
+        "optimizedSteps": [
+          {
+            "id": "vlmmc9",
+            "action": "navigate",
+            "screen": "LoginPage",
+            "elementName": "Target Application Page",
+            "url": "",
+            "value": "https://app.kdksoftware.com/login",
+            "platform": "web",
+            "placeholder": "",
+            "locator": {
+              "primary": {
+                "type": "url",
+                "value": "https://app.kdksoftware.com/login",
+                "playwright": "await page.goto('https://app.kdksoftware.com/login');"
+              },
+              "alternatives": []
+            }
+          },
+          {
+            "id": "4z61wd",
+            "action": "click",
+            "screen": "LoginPage",
+            "elementName": "Enter mobile number",
+            "url": "",
+            "value": "",
+            "platform": "web",
+            "placeholder": "",
+            "locator": {
+              "primary": {
+                "type": "placeholder",
+                "value": "[placeholder=\"Enter mobile number\"]",
+                "playwright": "await page.getByPlaceholder('Enter mobile number').click()"
+              },
+              "alternatives": [
+                {
+                  "type": "placeholder",
+                  "value": "[placeholder=\"Enter mobile number\"]",
+                  "playwright": "page.getByPlaceholder('Enter mobile number')"
+                },
+                {
+                  "type": "label",
+                  "value": "label:has-text(\"Mobile Number\")",
+                  "playwright": "page.getByLabel('Mobile Number')"
+                },
+                {
+                  "type": "css",
+                  "value": "#mobile",
+                  "playwright": "page.locator('#mobile')"
+                }
+              ]
+            }
+          },
+          {
+            "id": "eyo2vq",
+            "action": "hover",
+            "screen": "LoginPage",
+            "elementName": "Enter mobile number",
+            "url": "",
+            "value": "",
+            "platform": "web",
+            "placeholder": "",
+            "locator": {
+              "primary": {
+                "type": "placeholder",
+                "value": "[placeholder=\"Enter mobile number\"]",
+                "playwright": "await page.getByPlaceholder('Enter mobile number').hover()"
+              },
+              "alternatives": [
+                {
+                  "type": "placeholder",
+                  "value": "[placeholder=\"Enter mobile number\"]",
+                  "playwright": "page.getByPlaceholder('Enter mobile number')"
+                },
+                {
+                  "type": "label",
+                  "value": "label:has-text(\"Mobile Number\")",
+                  "playwright": "page.getByLabel('Mobile Number')"
+                },
+                {
+                  "type": "css",
+                  "value": "#mobile",
+                  "playwright": "page.locator('#mobile')"
+                }
+              ]
+            }
+          },
+          {
+            "id": "n14dvb",
+            "action": "fill",
+            "screen": "LoginPage",
+            "elementName": "Enter mobile number",
+            "url": "",
+            "value": "111",
+            "platform": "web",
+            "placeholder": "",
+            "locator": {
+              "primary": {
+                "type": "placeholder",
+                "value": "[placeholder=\"Enter mobile number\"]",
+                "playwright": "await page.getByPlaceholder('Enter mobile number').fill('1')"
+              },
+              "alternatives": [
+                {
+                  "type": "placeholder",
+                  "value": "[placeholder=\"Enter mobile number\"]",
+                  "playwright": "page.getByPlaceholder('Enter mobile number')"
+                },
+                {
+                  "type": "label",
+                  "value": "label:has-text(\"Mobile Number\")",
+                  "playwright": "page.getByLabel('Mobile Number')"
+                },
+                {
+                  "type": "css",
+                  "value": "#mobile",
+                  "playwright": "page.locator('#mobile')"
+                }
+              ]
+            }
+          }
+        ],
+        "pomStructure": "// --- LoginPage Object ---\nclass LoginPage {\n  constructor(private page: Page) {}\n  // NAVIGATE: Target Application Page\n  async navigate_target_application_page() {\n    await page.goto('https://app.kdksoftware.com/login');\n  }\n\n  // CLICK: Enter mobile number\n  async click_enter_mobile_number() {\n    await page.getByPlaceholder('Enter mobile number').click()\n  }\n\n  // HOVER: Enter mobile number\n  async hover_enter_mobile_number() {\n    await page.getByPlaceholder('Enter mobile number').hover()\n  }\n\n  // FILL: Enter mobile number\n  async fill_enter_mobile_number() {\n    await page.getByPlaceholder('Enter mobile number').fill('1')\n  }\n}\n",
+        "suggestedTitle": "New Recording Flow - Enhanced Test Flow - Enhanced Test Flow",
+        "explanation": "Successfully optimized 4 recorded steps into Page Object Model structure with clean locators."
+      },
+      "timestamp": 1788255710890,
+      "hits": 0,
+      "executionTimeMs": 11206
+    },
+    {
+      "key": "9e91efabc3ab560bdbbc80f1e49e1a70d540f636946b1da548d6d8b199154a51",
+      "functionName": "enhanceRecordedScript",
+      "argsHash": "9e91efabc3ab560bdbbc80f1e49e1a70d540f636946b1da548d6d8b199154a51",
+      "result": {
+        "optimizedSteps": [
+          {
+            "id": "vlmmc9",
+            "action": "navigate",
+            "screen": "LoginPage",
+            "elementName": "Target Application Page",
+            "url": "",
+            "value": "https://app.kdksoftware.com/login",
+            "platform": "web",
+            "placeholder": "",
+            "locator": {
+              "primary": {
+                "type": "url",
+                "value": "https://app.kdksoftware.com/login",
+                "playwright": "await page.goto('https://app.kdksoftware.com/login');"
+              },
+              "alternatives": []
+            }
+          },
+          {
+            "id": "4z61wd",
+            "action": "click",
+            "screen": "LoginPage",
+            "elementName": "Enter mobile number",
+            "url": "",
+            "value": "",
+            "platform": "web",
+            "placeholder": "",
+            "locator": {
+              "primary": {
+                "type": "placeholder",
+                "value": "[placeholder=\"Enter mobile number\"]",
+                "playwright": "await page.getByPlaceholder('Enter mobile number').click()"
+              },
+              "alternatives": [
+                {
+                  "type": "placeholder",
+                  "value": "[placeholder=\"Enter mobile number\"]",
+                  "playwright": "page.getByPlaceholder('Enter mobile number')"
+                },
+                {
+                  "type": "label",
+                  "value": "label:has-text(\"Mobile Number\")",
+                  "playwright": "page.getByLabel('Mobile Number')"
+                },
+                {
+                  "type": "css",
+                  "value": "#mobile",
+                  "playwright": "page.locator('#mobile')"
+                }
+              ]
+            }
+          },
+          {
+            "id": "eyo2vq",
+            "action": "hover",
+            "screen": "LoginPage",
+            "elementName": "Enter mobile number",
+            "url": "",
+            "value": "",
+            "platform": "web",
+            "placeholder": "",
+            "locator": {
+              "primary": {
+                "type": "placeholder",
+                "value": "[placeholder=\"Enter mobile number\"]",
+                "playwright": "await page.getByPlaceholder('Enter mobile number').hover()"
+              },
+              "alternatives": [
+                {
+                  "type": "placeholder",
+                  "value": "[placeholder=\"Enter mobile number\"]",
+                  "playwright": "page.getByPlaceholder('Enter mobile number')"
+                },
+                {
+                  "type": "label",
+                  "value": "label:has-text(\"Mobile Number\")",
+                  "playwright": "page.getByLabel('Mobile Number')"
+                },
+                {
+                  "type": "css",
+                  "value": "#mobile",
+                  "playwright": "page.locator('#mobile')"
+                }
+              ]
+            }
+          },
+          {
+            "id": "n14dvb",
+            "action": "fill",
+            "screen": "LoginPage",
+            "elementName": "Enter mobile number",
+            "url": "",
+            "value": "111",
+            "platform": "web",
+            "placeholder": "",
+            "locator": {
+              "primary": {
+                "type": "placeholder",
+                "value": "[placeholder=\"Enter mobile number\"]",
+                "playwright": "await page.getByPlaceholder('Enter mobile number').fill('1')"
+              },
+              "alternatives": [
+                {
+                  "type": "placeholder",
+                  "value": "[placeholder=\"Enter mobile number\"]",
+                  "playwright": "page.getByPlaceholder('Enter mobile number')"
+                },
+                {
+                  "type": "label",
+                  "value": "label:has-text(\"Mobile Number\")",
+                  "playwright": "page.getByLabel('Mobile Number')"
+                },
+                {
+                  "type": "css",
+                  "value": "#mobile",
+                  "playwright": "page.locator('#mobile')"
+                }
+              ]
+            }
+          }
+        ],
+        "pomStructure": "// --- LoginPage Object ---\nclass LoginPage {\n  constructor(private page: Page) {}\n  // NAVIGATE: Target Application Page\n  async navigate_target_application_page() {\n    await page.goto('https://app.kdksoftware.com/login');\n  }\n\n  // CLICK: Enter mobile number\n  async click_enter_mobile_number() {\n    await page.getByPlaceholder('Enter mobile number').click()\n  }\n\n  // HOVER: Enter mobile number\n  async hover_enter_mobile_number() {\n    await page.getByPlaceholder('Enter mobile number').hover()\n  }\n\n  // FILL: Enter mobile number\n  async fill_enter_mobile_number() {\n    await page.getByPlaceholder('Enter mobile number').fill('1')\n  }\n}\n",
+        "suggestedTitle": "New Recording Flow - Enhanced Test Flow - Enhanced Test Flow - Enhanced Test Flow",
+        "explanation": "Successfully optimized 4 recorded steps into Page Object Model structure with clean locators."
+      },
+      "timestamp": 1788255737203,
+      "hits": 0,
+      "executionTimeMs": 10934
+    },
+    {
+      "key": "f746bdb4773237bc1ac257434363e1cc8edede030f75e01f8b05e6e81116c471",
+      "functionName": "enhanceRecordedScript",
+      "argsHash": "f746bdb4773237bc1ac257434363e1cc8edede030f75e01f8b05e6e81116c471",
+      "result": {
+        "optimizedSteps": [
+          {
+            "id": "8xr14q",
+            "action": "navigate",
+            "screen": "LoginPage",
+            "elementName": "Target Application Page",
+            "url": "",
+            "value": "https://app.kdksoftware.com/login",
+            "platform": "web",
+            "placeholder": "",
+            "locator": {
+              "primary": {
+                "type": "url",
+                "value": "https://app.kdksoftware.com/login",
+                "playwright": "await page.goto('https://app.kdksoftware.com/login');"
+              },
+              "alternatives": []
+            }
+          },
+          {
+            "id": "gtuuge",
+            "action": "scroll",
+            "screen": "LoginPage",
+            "elementName": "All your tax compliance.\nOne s",
+            "url": "",
+            "value": "All your tax compliance.\nOne secure platform.\nGST filing, reconciliation & ITC tracking\nTDS returns, challans & Form 16/16A\nAuto-reconciliation with real-time mismatch detection\nERP integration for seamless data sync\nDownload reports in Excel, PDF & client-ready formats\nTrack notices, deadlines & compliance status in one place\nTrusted by 1.5L+ users across India\nWelcome back to Spectrum Cloud\n\nAccess your GST, TDS & ITR dashboard in seconds\n\nMobile Number\n+91\nPassword\nForgot password? Reset instantly via OTP\nLogin to Dashboard\n→\n\n🔒\nSecure login\n•\nOTP verification\n•\nEncrypted access\n\nNew to Spectrum Cloud? Create free account",
+            "platform": "web",
+            "placeholder": "",
+            "locator": {
+              "primary": {
+                "type": "css",
+                "value": "body",
+                "playwright": "await page.locator('body')"
+              },
+              "alternatives": [
+                {
+                  "type": "css",
+                  "value": "body",
+                  "playwright": "page.locator('body')"
+                },
+                {
+                  "type": "xpath",
+                  "value": "/html[1]/body[1]",
+                  "playwright": "page.locator('xpath=/html[1]/body[1]')"
+                }
+              ]
+            }
+          },
+          {
+            "id": "g6o3pr",
+            "action": "click",
+            "screen": "LoginPage",
+            "elementName": "Enter password",
+            "url": "",
+            "value": "********",
+            "platform": "web",
+            "placeholder": "${USERPASSWORD}",
+            "locator": {
+              "primary": {
+                "type": "placeholder",
+                "value": "[placeholder=\"Enter password\"]",
+                "playwright": "await page.getByPlaceholder('Enter password').click()"
+              },
+              "alternatives": [
+                {
+                  "type": "placeholder",
+                  "value": "[placeholder=\"Enter password\"]",
+                  "playwright": "page.getByPlaceholder('Enter password')"
+                },
+                {
+                  "type": "label",
+                  "value": "label:has-text(\"Password\")",
+                  "playwright": "page.getByLabel('Password')"
+                },
+                {
+                  "type": "css",
+                  "value": "#userPassword",
+                  "playwright": "page.locator('#userPassword')"
+                }
+              ]
+            }
+          },
+          {
+            "id": "brz7lk",
+            "action": "hover",
+            "screen": "LoginPage",
+            "elementName": "Enter password",
+            "url": "",
+            "value": "********",
+            "platform": "web",
+            "placeholder": "${USERPASSWORD}",
+            "locator": {
+              "primary": {
+                "type": "placeholder",
+                "value": "[placeholder=\"Enter password\"]",
+                "playwright": "await page.getByPlaceholder('Enter password').hover()"
+              },
+              "alternatives": [
+                {
+                  "type": "placeholder",
+                  "value": "[placeholder=\"Enter password\"]",
+                  "playwright": "page.getByPlaceholder('Enter password')"
+                },
+                {
+                  "type": "label",
+                  "value": "label:has-text(\"Password\")",
+                  "playwright": "page.getByLabel('Password')"
+                },
+                {
+                  "type": "css",
+                  "value": "#userPassword",
+                  "playwright": "page.locator('#userPassword')"
+                }
+              ]
+            }
+          },
+          {
+            "id": "duhvvc",
+            "action": "fill",
+            "screen": "LoginPage",
+            "elementName": "Enter password",
+            "url": "",
+            "value": "********",
+            "platform": "web",
+            "placeholder": "${USERPASSWORD}",
+            "locator": {
+              "primary": {
+                "type": "placeholder",
+                "value": "[placeholder=\"Enter password\"]",
+                "playwright": "await page.getByPlaceholder('Enter password').fill('********')"
+              },
+              "alternatives": [
+                {
+                  "type": "placeholder",
+                  "value": "[placeholder=\"Enter password\"]",
+                  "playwright": "page.getByPlaceholder('Enter password')"
+                },
+                {
+                  "type": "label",
+                  "value": "label:has-text(\"Password\")",
+                  "playwright": "page.getByLabel('Password')"
+                },
+                {
+                  "type": "css",
+                  "value": "#userPassword",
+                  "playwright": "page.locator('#userPassword')"
+                }
+              ]
+            }
+          }
+        ],
+        "pomStructure": "// --- LoginPage Object ---\nclass LoginPage {\n  constructor(private page: Page) {}\n  // NAVIGATE: Target Application Page\n  async navigate_target_application_page() {\n    await page.goto('https://app.kdksoftware.com/login');\n  }\n\n  // SCROLL: All your tax compliance.\nOne s\n  async scroll_all_your_tax_compliance__one_s() {\n    await page.locator('body')\n  }\n\n  // CLICK: Enter password\n  async click_enter_password() {\n    await page.getByPlaceholder('Enter password').click()\n  }\n\n  // HOVER: Enter password\n  async hover_enter_password() {\n    await page.getByPlaceholder('Enter password').hover()\n  }\n\n  // FILL: Enter password\n  async fill_enter_password() {\n    await page.getByPlaceholder('Enter password').fill('********')\n  }\n}\n",
+        "suggestedTitle": "New Recording Flow - Enhanced Test Flow",
+        "explanation": "Successfully optimized 5 recorded steps into Page Object Model structure with clean locators."
+      },
+      "timestamp": 1788255815643,
+      "hits": 0,
+      "executionTimeMs": 11090
+    },
+    {
+      "key": "8308dd94fa5f28001741304f7371e5558fec83db420341869155ab7fa0d2d368",
+      "functionName": "enhanceRecordedScript",
+      "argsHash": "8308dd94fa5f28001741304f7371e5558fec83db420341869155ab7fa0d2d368",
+      "result": {
+        "optimizedSteps": [
+          {
+            "id": "8xr14q",
+            "action": "navigate",
+            "screen": "LoginPage",
+            "elementName": "Target Application Page",
+            "url": "",
+            "value": "https://app.kdksoftware.com/login",
+            "platform": "web",
+            "placeholder": "",
+            "locator": {
+              "primary": {
+                "type": "url",
+                "value": "https://app.kdksoftware.com/login",
+                "playwright": "await page.goto('https://app.kdksoftware.com/login');"
+              },
+              "alternatives": []
+            }
+          },
+          {
+            "id": "gtuuge",
+            "action": "scroll",
+            "screen": "LoginPage",
+            "elementName": "All your tax compliance.\nOne s",
+            "url": "",
+            "value": "All your tax compliance.\nOne secure platform.\nGST filing, reconciliation & ITC tracking\nTDS returns, challans & Form 16/16A\nAuto-reconciliation with real-time mismatch detection\nERP integration for seamless data sync\nDownload reports in Excel, PDF & client-ready formats\nTrack notices, deadlines & compliance status in one place\nTrusted by 1.5L+ users across India\nWelcome back to Spectrum Cloud\n\nAccess your GST, TDS & ITR dashboard in seconds\n\nMobile Number\n+91\nPassword\nForgot password? Reset instantly via OTP\nLogin to Dashboard\n→\n\n🔒\nSecure login\n•\nOTP verification\n•\nEncrypted access\n\nNew to Spectrum Cloud? Create free account",
+            "platform": "web",
+            "placeholder": "",
+            "locator": {
+              "primary": {
+                "type": "css",
+                "value": "body",
+                "playwright": "await page.locator('body')"
+              },
+              "alternatives": [
+                {
+                  "type": "css",
+                  "value": "body",
+                  "playwright": "page.locator('body')"
+                },
+                {
+                  "type": "xpath",
+                  "value": "/html[1]/body[1]",
+                  "playwright": "page.locator('xpath=/html[1]/body[1]')"
+                }
+              ]
+            }
+          },
+          {
+            "id": "g6o3pr",
+            "action": "click",
+            "screen": "LoginPage",
+            "elementName": "Enter password",
+            "url": "",
+            "value": "********",
+            "platform": "web",
+            "placeholder": "${USERPASSWORD}",
+            "locator": {
+              "primary": {
+                "type": "placeholder",
+                "value": "[placeholder=\"Enter password\"]",
+                "playwright": "await page.getByPlaceholder('Enter password').click()"
+              },
+              "alternatives": [
+                {
+                  "type": "placeholder",
+                  "value": "[placeholder=\"Enter password\"]",
+                  "playwright": "page.getByPlaceholder('Enter password')"
+                },
+                {
+                  "type": "label",
+                  "value": "label:has-text(\"Password\")",
+                  "playwright": "page.getByLabel('Password')"
+                },
+                {
+                  "type": "css",
+                  "value": "#userPassword",
+                  "playwright": "page.locator('#userPassword')"
+                }
+              ]
+            }
+          },
+          {
+            "id": "brz7lk",
+            "action": "hover",
+            "screen": "LoginPage",
+            "elementName": "Enter password",
+            "url": "",
+            "value": "********",
+            "platform": "web",
+            "placeholder": "${USERPASSWORD}",
+            "locator": {
+              "primary": {
+                "type": "placeholder",
+                "value": "[placeholder=\"Enter password\"]",
+                "playwright": "await page.getByPlaceholder('Enter password').hover()"
+              },
+              "alternatives": [
+                {
+                  "type": "placeholder",
+                  "value": "[placeholder=\"Enter password\"]",
+                  "playwright": "page.getByPlaceholder('Enter password')"
+                },
+                {
+                  "type": "label",
+                  "value": "label:has-text(\"Password\")",
+                  "playwright": "page.getByLabel('Password')"
+                },
+                {
+                  "type": "css",
+                  "value": "#userPassword",
+                  "playwright": "page.locator('#userPassword')"
+                }
+              ]
+            }
+          },
+          {
+            "id": "duhvvc",
+            "action": "fill",
+            "screen": "LoginPage",
+            "elementName": "Enter password",
+            "url": "",
+            "value": "********",
+            "platform": "web",
+            "placeholder": "${USERPASSWORD}",
+            "locator": {
+              "primary": {
+                "type": "placeholder",
+                "value": "[placeholder=\"Enter password\"]",
+                "playwright": "await page.getByPlaceholder('Enter password').fill('********')"
+              },
+              "alternatives": [
+                {
+                  "type": "placeholder",
+                  "value": "[placeholder=\"Enter password\"]",
+                  "playwright": "page.getByPlaceholder('Enter password')"
+                },
+                {
+                  "type": "label",
+                  "value": "label:has-text(\"Password\")",
+                  "playwright": "page.getByLabel('Password')"
+                },
+                {
+                  "type": "css",
+                  "value": "#userPassword",
+                  "playwright": "page.locator('#userPassword')"
+                }
+              ]
+            }
+          }
+        ],
+        "pomStructure": "// --- LoginPage Object ---\nclass LoginPage {\n  constructor(private page: Page) {}\n  // NAVIGATE: Target Application Page\n  async navigate_target_application_page() {\n    await page.goto('https://app.kdksoftware.com/login');\n  }\n\n  // SCROLL: All your tax compliance.\nOne s\n  async scroll_all_your_tax_compliance__one_s() {\n    await page.locator('body')\n  }\n\n  // CLICK: Enter password\n  async click_enter_password() {\n    await page.getByPlaceholder('Enter password').click()\n  }\n\n  // HOVER: Enter password\n  async hover_enter_password() {\n    await page.getByPlaceholder('Enter password').hover()\n  }\n\n  // FILL: Enter password\n  async fill_enter_password() {\n    await page.getByPlaceholder('Enter password').fill('********')\n  }\n}\n",
+        "suggestedTitle": "New Recording Flow - Enhanced Test Flow - Enhanced Test Flow",
+        "explanation": "Successfully optimized 5 recorded steps into Page Object Model structure with clean locators."
+      },
+      "timestamp": 1788255835507,
+      "hits": 0,
+      "executionTimeMs": 11494
+    },
+    {
+      "key": "ed5db9d807c179212aca3b9cde1da5f80dea7ab45750be4c8e5fd94ff99e0380",
+      "functionName": "enhanceRecordedScript",
+      "argsHash": "ed5db9d807c179212aca3b9cde1da5f80dea7ab45750be4c8e5fd94ff99e0380",
+      "result": {
+        "optimizedSteps": [
+          {
+            "id": "8vnzk",
+            "action": "navigate",
+            "screen": "LoginPage",
+            "elementName": "Target Application Page",
+            "url": "",
+            "value": "https://app.kdksoftware.com/login",
+            "platform": "web",
+            "placeholder": "",
+            "locator": {
+              "primary": {
+                "type": "url",
+                "value": "https://app.kdksoftware.com/login",
+                "playwright": "await page.goto('https://app.kdksoftware.com/login');"
+              },
+              "alternatives": []
+            }
+          }
+        ],
+        "pomStructure": "// --- LoginPage Object ---\nclass LoginPage {\n  constructor(private page: Page) {}\n  // NAVIGATE: Target Application Page\n  async navigate_target_application_page() {\n    await page.goto('https://app.kdksoftware.com/login');\n  }\n}\n",
+        "suggestedTitle": "New Recording Flow - Enhanced Test Flow",
+        "explanation": "Successfully optimized 1 recorded steps into Page Object Model structure with clean locators."
+      },
+      "timestamp": 1788255863699,
+      "hits": 0,
+      "executionTimeMs": 11280
+    },
+    {
+      "key": "c99e54337667d642658ac29fdbe4bf83a978a5d701a96887b5d6d7d9ec9632a2",
+      "functionName": "enhanceRecordedScript",
+      "argsHash": "c99e54337667d642658ac29fdbe4bf83a978a5d701a96887b5d6d7d9ec9632a2",
+      "result": {
+        "optimizedSteps": [
+          {
+            "id": "8vnzk",
+            "action": "navigate",
+            "screen": "LoginPage",
+            "elementName": "Target Application Page",
+            "url": "",
+            "value": "https://app.kdksoftware.com/login",
+            "platform": "web",
+            "placeholder": "",
+            "locator": {
+              "primary": {
+                "type": "url",
+                "value": "https://app.kdksoftware.com/login",
+                "playwright": "await page.goto('https://app.kdksoftware.com/login');"
+              },
+              "alternatives": []
+            }
+          }
+        ],
+        "pomStructure": "// --- LoginPage Object ---\nclass LoginPage {\n  constructor(private page: Page) {}\n  // NAVIGATE: Target Application Page\n  async navigate_target_application_page() {\n    await page.goto('https://app.kdksoftware.com/login');\n  }\n}\n",
+        "suggestedTitle": "New Recording Flow - Enhanced Test Flow - Enhanced Test Flow",
+        "explanation": "Successfully optimized 1 recorded steps into Page Object Model structure with clean locators."
+      },
+      "timestamp": 1788255883740,
+      "hits": 0,
+      "executionTimeMs": 10464
+    },
+    {
+      "key": "4cbaa37d99ee5c331579be7b6e568156c124d0b17dc334c18cf08f5283b87530",
+      "functionName": "enhanceRecordedScript",
+      "argsHash": "4cbaa37d99ee5c331579be7b6e568156c124d0b17dc334c18cf08f5283b87530",
+      "result": {
+        "optimizedSteps": [
+          {
+            "id": "j45k3d",
+            "action": "navigate",
+            "screen": "LoginPage",
+            "elementName": "Target Application Page",
+            "url": "",
+            "value": "https://app.kdksoftware.com/login",
+            "platform": "web",
+            "placeholder": "",
+            "locator": {
+              "primary": {
+                "type": "url",
+                "value": "https://app.kdksoftware.com/login",
+                "playwright": "await page.goto('https://app.kdksoftware.com/login');"
+              },
+              "alternatives": []
+            }
+          },
+          {
+            "id": "ui07cj",
+            "action": "click",
+            "screen": "LoginPage",
+            "elementName": "Enter mobile number",
+            "url": "",
+            "value": "",
+            "platform": "web",
+            "placeholder": "",
+            "locator": {
+              "primary": {
+                "type": "placeholder",
+                "value": "[placeholder=\"Enter mobile number\"]",
+                "playwright": "await page.getByPlaceholder('Enter mobile number').click()"
+              },
+              "alternatives": [
+                {
+                  "type": "placeholder",
+                  "value": "[placeholder=\"Enter mobile number\"]",
+                  "playwright": "page.getByPlaceholder('Enter mobile number')"
+                },
+                {
+                  "type": "label",
+                  "value": "label:has-text(\"Mobile Number\")",
+                  "playwright": "page.getByLabel('Mobile Number')"
+                },
+                {
+                  "type": "css",
+                  "value": "#mobile",
+                  "playwright": "page.locator('#mobile')"
+                }
+              ]
+            }
+          },
+          {
+            "id": "f3umej",
+            "action": "hover",
+            "screen": "LoginPage",
+            "elementName": "Enter mobile number",
+            "url": "",
+            "value": "1",
+            "platform": "web",
+            "placeholder": "",
+            "locator": {
+              "primary": {
+                "type": "placeholder",
+                "value": "[placeholder=\"Enter mobile number\"]",
+                "playwright": "await page.getByPlaceholder('Enter mobile number').hover()"
+              },
+              "alternatives": [
+                {
+                  "type": "placeholder",
+                  "value": "[placeholder=\"Enter mobile number\"]",
+                  "playwright": "page.getByPlaceholder('Enter mobile number')"
+                },
+                {
+                  "type": "label",
+                  "value": "label:has-text(\"Mobile Number\")",
+                  "playwright": "page.getByLabel('Mobile Number')"
+                },
+                {
+                  "type": "css",
+                  "value": "#mobile",
+                  "playwright": "page.locator('#mobile')"
+                }
+              ]
+            }
+          },
+          {
+            "id": "b4olp6",
+            "action": "fill",
+            "screen": "LoginPage",
+            "elementName": "Enter mobile number",
+            "url": "",
+            "value": "11",
+            "platform": "web",
+            "placeholder": "",
+            "locator": {
+              "primary": {
+                "type": "placeholder",
+                "value": "[placeholder=\"Enter mobile number\"]",
+                "playwright": "await page.getByPlaceholder('Enter mobile number').fill('11')"
+              },
+              "alternatives": [
+                {
+                  "type": "placeholder",
+                  "value": "[placeholder=\"Enter mobile number\"]",
+                  "playwright": "page.getByPlaceholder('Enter mobile number')"
+                },
+                {
+                  "type": "label",
+                  "value": "label:has-text(\"Mobile Number\")",
+                  "playwright": "page.getByLabel('Mobile Number')"
+                },
+                {
+                  "type": "css",
+                  "value": "#mobile",
+                  "playwright": "page.locator('#mobile')"
+                }
+              ]
+            }
+          },
+          {
+            "id": "n8u79m",
+            "action": "hover",
+            "screen": "LoginPage",
+            "elementName": "Enter password",
+            "url": "",
+            "value": "********",
+            "platform": "web",
+            "placeholder": "${USERPASSWORD}",
+            "locator": {
+              "primary": {
+                "type": "placeholder",
+                "value": "[placeholder=\"Enter password\"]",
+                "playwright": "await page.getByPlaceholder('Enter password').hover()"
+              },
+              "alternatives": [
+                {
+                  "type": "placeholder",
+                  "value": "[placeholder=\"Enter password\"]",
+                  "playwright": "page.getByPlaceholder('Enter password')"
+                },
+                {
+                  "type": "label",
+                  "value": "label:has-text(\"Password\")",
+                  "playwright": "page.getByLabel('Password')"
+                },
+                {
+                  "type": "css",
+                  "value": "#userPassword",
+                  "playwright": "page.locator('#userPassword')"
+                }
+              ]
+            }
+          },
+          {
+            "id": "zx7749",
+            "action": "click",
+            "screen": "LoginPage",
+            "elementName": "Enter password",
+            "url": "",
+            "value": "********",
+            "platform": "web",
+            "placeholder": "${USERPASSWORD}",
+            "locator": {
+              "primary": {
+                "type": "placeholder",
+                "value": "[placeholder=\"Enter password\"]",
+                "playwright": "await page.getByPlaceholder('Enter password').click()"
+              },
+              "alternatives": [
+                {
+                  "type": "placeholder",
+                  "value": "[placeholder=\"Enter password\"]",
+                  "playwright": "page.getByPlaceholder('Enter password')"
+                },
+                {
+                  "type": "label",
+                  "value": "label:has-text(\"Password\")",
+                  "playwright": "page.getByLabel('Password')"
+                },
+                {
+                  "type": "css",
+                  "value": "#userPassword",
+                  "playwright": "page.locator('#userPassword')"
+                }
+              ]
+            }
+          },
+          {
+            "id": "4hf65k",
+            "action": "hover",
+            "screen": "LoginPage",
+            "elementName": "Show password",
+            "url": "",
+            "value": "********",
+            "platform": "web",
+            "placeholder": "${FIELD}",
+            "locator": {
+              "primary": {
+                "type": "role",
+                "value": "[role=\"button\"][name=\"Show password\"]",
+                "playwright": "await page.getByRole('button', { name: 'Show password' }).hover()"
+              },
+              "alternatives": [
+                {
+                  "type": "role",
+                  "value": "[role=\"button\"][name=\"Show password\"]",
+                  "playwright": "page.getByRole('button', { name: 'Show password' })"
+                },
+                {
+                  "type": "css",
+                  "value": "[role=\"button\"][name*=\"Show password\"]",
+                  "playwright": "page.locator('[role=\"button\"][name*=\"Show password\"]')"
+                },
+                {
+                  "type": "xpath",
+                  "value": "/html[1]/body[1]/div[1]/main[1]/div[1]/div[1]/section[2]/form[1]/div[2]/div[1]/button[1]",
+                  "playwright": "page.locator('xpath=/html[1]/body[1]/div[1]/main[1]/div[1]/div[1]/section[2]/form[1]/div[2]/div[1]/button[1]')"
+                }
+              ]
+            }
+          },
+          {
+            "id": "7ce3wq",
+            "action": "fill",
+            "screen": "LoginPage",
+            "elementName": "Enter password",
+            "url": "",
+            "value": "********",
+            "platform": "web",
+            "placeholder": "${USERPASSWORD}",
+            "locator": {
+              "primary": {
+                "type": "placeholder",
+                "value": "[placeholder=\"Enter password\"]",
+                "playwright": "await page.getByPlaceholder('Enter password').fill('********')"
+              },
+              "alternatives": [
+                {
+                  "type": "placeholder",
+                  "value": "[placeholder=\"Enter password\"]",
+                  "playwright": "page.getByPlaceholder('Enter password')"
+                },
+                {
+                  "type": "label",
+                  "value": "label:has-text(\"Password\")",
+                  "playwright": "page.getByLabel('Password')"
+                },
+                {
+                  "type": "css",
+                  "value": "#userPassword",
+                  "playwright": "page.locator('#userPassword')"
+                }
+              ]
+            }
+          }
+        ],
+        "pomStructure": "// --- LoginPage Object ---\nclass LoginPage {\n  constructor(private page: Page) {}\n  // NAVIGATE: Target Application Page\n  async navigate_target_application_page() {\n    await page.goto('https://app.kdksoftware.com/login');\n  }\n\n  // CLICK: Enter mobile number\n  async click_enter_mobile_number() {\n    await page.getByPlaceholder('Enter mobile number').click()\n  }\n\n  // HOVER: Enter mobile number\n  async hover_enter_mobile_number() {\n    await page.getByPlaceholder('Enter mobile number').hover()\n  }\n\n  // FILL: Enter mobile number\n  async fill_enter_mobile_number() {\n    await page.getByPlaceholder('Enter mobile number').fill('11')\n  }\n\n  // HOVER: Enter password\n  async hover_enter_password() {\n    await page.getByPlaceholder('Enter password').hover()\n  }\n\n  // CLICK: Enter password\n  async click_enter_password() {\n    await page.getByPlaceholder('Enter password').click()\n  }\n\n  // HOVER: Show password\n  async hover_show_password() {\n    await page.getByRole('button', { name: 'Show password' }).hover()\n  }\n\n  // FILL: Enter password\n  async fill_enter_password() {\n    await page.getByPlaceholder('Enter password').fill('********')\n  }\n}\n",
+        "suggestedTitle": "New Recording Flow - Enhanced Test Flow",
+        "explanation": "Successfully optimized 8 recorded steps into Page Object Model structure with clean locators."
+      },
+      "timestamp": 1788255955114,
+      "hits": 0,
+      "executionTimeMs": 10079
+    },
+    {
+      "key": "de62267e26e58062b095fd7f407bbee07566ee30c82a83c0cb624a40dc2a76c2",
+      "functionName": "enhanceRecordedScript",
+      "argsHash": "de62267e26e58062b095fd7f407bbee07566ee30c82a83c0cb624a40dc2a76c2",
+      "result": {
+        "optimizedSteps": [
+          {
+            "id": "f3flc",
+            "action": "navigate",
+            "screen": "LoginPage",
+            "elementName": "Target Application Page",
+            "url": "",
+            "value": "https://app.kdksoftware.com/login",
+            "platform": "web",
+            "placeholder": "",
+            "locator": {
+              "primary": {
+                "type": "url",
+                "value": "https://app.kdksoftware.com/login",
+                "playwright": "await page.goto('https://app.kdksoftware.com/login');"
+              },
+              "alternatives": []
+            }
+          },
+          {
+            "id": "n2kwuao",
+            "action": "hover",
+            "screen": "LoginPage",
+            "elementName": "Enter mobile number",
+            "url": "",
+            "value": "",
+            "platform": "web",
+            "placeholder": "",
+            "locator": {
+              "primary": {
+                "type": "placeholder",
+                "value": "[placeholder=\"Enter mobile number\"]",
+                "playwright": "await page.getByPlaceholder('Enter mobile number').hover()"
+              },
+              "alternatives": [
+                {
+                  "type": "placeholder",
+                  "value": "[placeholder=\"Enter mobile number\"]",
+                  "playwright": "page.getByPlaceholder('Enter mobile number')"
+                },
+                {
+                  "type": "label",
+                  "value": "label:has-text(\"Mobile Number\")",
+                  "playwright": "page.getByLabel('Mobile Number')"
+                },
+                {
+                  "type": "css",
+                  "value": "#mobile",
+                  "playwright": "page.locator('#mobile')"
+                }
+              ]
+            }
+          },
+          {
+            "id": "9kux9p",
+            "action": "click",
+            "screen": "LoginPage",
+            "elementName": "Enter mobile number",
+            "url": "",
+            "value": "",
+            "platform": "web",
+            "placeholder": "",
+            "locator": {
+              "primary": {
+                "type": "placeholder",
+                "value": "[placeholder=\"Enter mobile number\"]",
+                "playwright": "await page.getByPlaceholder('Enter mobile number').click()"
+              },
+              "alternatives": [
+                {
+                  "type": "placeholder",
+                  "value": "[placeholder=\"Enter mobile number\"]",
+                  "playwright": "page.getByPlaceholder('Enter mobile number')"
+                },
+                {
+                  "type": "label",
+                  "value": "label:has-text(\"Mobile Number\")",
+                  "playwright": "page.getByLabel('Mobile Number')"
+                },
+                {
+                  "type": "css",
+                  "value": "#mobile",
+                  "playwright": "page.locator('#mobile')"
+                }
+              ]
+            }
+          },
+          {
+            "id": "b1mmfp",
+            "action": "fill",
+            "screen": "LoginPage",
+            "elementName": "Enter mobile number",
+            "url": "",
+            "value": "8122809283",
+            "platform": "web",
+            "placeholder": "",
+            "locator": {
+              "primary": {
+                "type": "placeholder",
+                "value": "[placeholder=\"Enter mobile number\"]",
+                "playwright": "await page.getByPlaceholder('Enter mobile number').fill('8122')"
+              },
+              "alternatives": [
+                {
+                  "type": "placeholder",
+                  "value": "[placeholder=\"Enter mobile number\"]",
+                  "playwright": "page.getByPlaceholder('Enter mobile number')"
+                },
+                {
+                  "type": "label",
+                  "value": "label:has-text(\"Mobile Number\")",
+                  "playwright": "page.getByLabel('Mobile Number')"
+                },
+                {
+                  "type": "css",
+                  "value": "#mobile",
+                  "playwright": "page.locator('#mobile')"
+                }
+              ]
+            }
+          },
+          {
+            "id": "8hghg9",
+            "action": "hover",
+            "screen": "LoginPage",
+            "elementName": "Enter password",
+            "url": "",
+            "value": "********",
+            "platform": "web",
+            "placeholder": "${USERPASSWORD}",
+            "locator": {
+              "primary": {
+                "type": "placeholder",
+                "value": "[placeholder=\"Enter password\"]",
+                "playwright": "await page.getByPlaceholder('Enter password').hover()"
+              },
+              "alternatives": [
+                {
+                  "type": "placeholder",
+                  "value": "[placeholder=\"Enter password\"]",
+                  "playwright": "page.getByPlaceholder('Enter password')"
+                },
+                {
+                  "type": "label",
+                  "value": "label:has-text(\"Password\")",
+                  "playwright": "page.getByLabel('Password')"
+                },
+                {
+                  "type": "css",
+                  "value": "#userPassword",
+                  "playwright": "page.locator('#userPassword')"
+                }
+              ]
+            }
+          },
+          {
+            "id": "xtkcpm",
+            "action": "click",
+            "screen": "LoginPage",
+            "elementName": "Enter password",
+            "url": "",
+            "value": "********",
+            "platform": "web",
+            "placeholder": "${USERPASSWORD}",
+            "locator": {
+              "primary": {
+                "type": "placeholder",
+                "value": "[placeholder=\"Enter password\"]",
+                "playwright": "await page.getByPlaceholder('Enter password').click()"
+              },
+              "alternatives": [
+                {
+                  "type": "placeholder",
+                  "value": "[placeholder=\"Enter password\"]",
+                  "playwright": "page.getByPlaceholder('Enter password')"
+                },
+                {
+                  "type": "label",
+                  "value": "label:has-text(\"Password\")",
+                  "playwright": "page.getByLabel('Password')"
+                },
+                {
+                  "type": "css",
+                  "value": "#userPassword",
+                  "playwright": "page.locator('#userPassword')"
+                }
+              ]
+            }
+          },
+          {
+            "id": "fcza8",
+            "action": "fill",
+            "screen": "LoginPage",
+            "elementName": "Enter password",
+            "url": "",
+            "value": "********",
+            "platform": "web",
+            "placeholder": "${USERPASSWORD}",
+            "locator": {
+              "primary": {
+                "type": "placeholder",
+                "value": "[placeholder=\"Enter password\"]",
+                "playwright": "await page.getByPlaceholder('Enter password').fill('********')"
+              },
+              "alternatives": [
+                {
+                  "type": "placeholder",
+                  "value": "[placeholder=\"Enter password\"]",
+                  "playwright": "page.getByPlaceholder('Enter password')"
+                },
+                {
+                  "type": "label",
+                  "value": "label:has-text(\"Password\")",
+                  "playwright": "page.getByLabel('Password')"
+                },
+                {
+                  "type": "css",
+                  "value": "#userPassword",
+                  "playwright": "page.locator('#userPassword')"
+                }
+              ]
+            }
+          },
+          {
+            "id": "7vqq3",
+            "action": "click",
+            "screen": "LoginPage",
+            "elementName": "Show password",
+            "url": "",
+            "value": "********",
+            "platform": "web",
+            "placeholder": "${FIELD}",
+            "locator": {
+              "primary": {
+                "type": "role",
+                "value": "[role=\"button\"][name=\"Show password\"]",
+                "playwright": "await page.getByRole('button', { name: 'Show password' }).click()"
+              },
+              "alternatives": [
+                {
+                  "type": "role",
+                  "value": "[role=\"button\"][name=\"Show password\"]",
+                  "playwright": "page.getByRole('button', { name: 'Show password' })"
+                },
+                {
+                  "type": "css",
+                  "value": "[role=\"button\"][name*=\"Show password\"]",
+                  "playwright": "page.locator('[role=\"button\"][name*=\"Show password\"]')"
+                },
+                {
+                  "type": "xpath",
+                  "value": "/html[1]/body[1]/div[1]/main[1]/div[1]/div[1]/section[2]/form[1]/div[2]/div[1]/button[1]",
+                  "playwright": "page.locator('xpath=/html[1]/body[1]/div[1]/main[1]/div[1]/div[1]/section[2]/form[1]/div[2]/div[1]/button[1]')"
+                }
+              ]
+            }
+          },
+          {
+            "id": "l0kn5i",
+            "action": "hover",
+            "screen": "LoginPage",
+            "elementName": "Hide password",
+            "url": "",
+            "value": "********",
+            "platform": "web",
+            "placeholder": "${FIELD}",
+            "locator": {
+              "primary": {
+                "type": "role",
+                "value": "[role=\"button\"][name=\"Hide password\"]",
+                "playwright": "await page.getByRole('button', { name: 'Hide password' }).hover()"
+              },
+              "alternatives": [
+                {
+                  "type": "role",
+                  "value": "[role=\"button\"][name=\"Hide password\"]",
+                  "playwright": "page.getByRole('button', { name: 'Hide password' })"
+                },
+                {
+                  "type": "css",
+                  "value": "[role=\"button\"][name*=\"Hide password\"]",
+                  "playwright": "page.locator('[role=\"button\"][name*=\"Hide password\"]')"
+                },
+                {
+                  "type": "xpath",
+                  "value": "/html[1]/body[1]/div[1]/main[1]/div[1]/div[1]/section[2]/form[1]/div[2]/div[1]/button[1]",
+                  "playwright": "page.locator('xpath=/html[1]/body[1]/div[1]/main[1]/div[1]/div[1]/section[2]/form[1]/div[2]/div[1]/button[1]')"
+                }
+              ]
+            }
+          },
+          {
+            "id": "sazwg",
+            "action": "click",
+            "screen": "LoginPage",
+            "elementName": "Login to Dashboard\n→",
+            "url": "",
+            "value": "Login to Dashboard\n→",
+            "platform": "web",
+            "placeholder": "",
+            "locator": {
+              "primary": {
+                "type": "role",
+                "value": "[role=\"button\"][name=\"Login to Dashboard\n→\"]",
+                "playwright": "await page.getByRole('button', { name: 'Login to Dashboard\n→' }).click()"
+              },
+              "alternatives": [
+                {
+                  "type": "role",
+                  "value": "[role=\"button\"][name=\"Login to Dashboard\n→\"]",
+                  "playwright": "page.getByRole('button', { name: 'Login to Dashboard\n→' })"
+                },
+                {
+                  "type": "css",
+                  "value": "#loginnow",
+                  "playwright": "page.locator('#loginnow')"
+                },
+                {
+                  "type": "xpath",
+                  "value": "//*[@id=\"loginnow\"]",
+                  "playwright": "page.locator('xpath=//*[@id=\"loginnow\"]')"
+                }
+              ]
+            }
+          },
+          {
+            "id": "lr86z",
+            "action": "submit",
+            "screen": "LoginPage",
+            "elementName": "Mobile Number\n+91\nPassword\nFor",
+            "url": "",
+            "value": "********",
+            "platform": "web",
+            "placeholder": "",
+            "locator": {
+              "primary": {
+                "type": "css",
+                "value": "html > body > div:nth-of-type(1) > main > div:nth-of-type(1) > div > section:nth-of-type(2) > form",
+                "playwright": "await page.locator('html > body > div:nth-of-type(1) > main > div:nth-of-type(1) > div > section:nth-of-type(2) > form')"
+              },
+              "alternatives": [
+                {
+                  "type": "css",
+                  "value": "html > body > div:nth-of-type(1) > main > div:nth-of-type(1) > div > section:nth-of-type(2) > form",
+                  "playwright": "page.locator('html > body > div:nth-of-type(1) > main > div:nth-of-type(1) > div > section:nth-of-type(2) > form')"
+                },
+                {
+                  "type": "xpath",
+                  "value": "/html[1]/body[1]/div[1]/main[1]/div[1]/div[1]/section[2]/form[1]",
+                  "playwright": "page.locator('xpath=/html[1]/body[1]/div[1]/main[1]/div[1]/div[1]/section[2]/form[1]')"
+                }
+              ]
+            }
+          },
+          {
+            "id": "5dmk4q",
+            "action": "hover",
+            "screen": "LoginPage",
+            "elementName": "Login to Dashboard\n→",
+            "url": "",
+            "value": "Login to Dashboard\n→",
+            "platform": "web",
+            "placeholder": "",
+            "locator": {
+              "primary": {
+                "type": "role",
+                "value": "[role=\"button\"][name=\"Login to Dashboard\n→\"]",
+                "playwright": "await page.getByRole('button', { name: 'Login to Dashboard\n→' }).hover()"
+              },
+              "alternatives": [
+                {
+                  "type": "role",
+                  "value": "[role=\"button\"][name=\"Login to Dashboard\n→\"]",
+                  "playwright": "page.getByRole('button', { name: 'Login to Dashboard\n→' })"
+                },
+                {
+                  "type": "css",
+                  "value": "#loginnow",
+                  "playwright": "page.locator('#loginnow')"
+                },
+                {
+                  "type": "xpath",
+                  "value": "//*[@id=\"loginnow\"]",
+                  "playwright": "page.locator('xpath=//*[@id=\"loginnow\"]')"
+                }
+              ]
+            }
+          },
+          {
+            "id": "f5daog",
+            "action": "navigate",
+            "screen": "LoginPage",
+            "elementName": "Home Page",
+            "url": "",
+            "value": "https://app.kdksoftware.com/",
+            "platform": "web",
+            "placeholder": "",
+            "locator": {
+              "primary": {
+                "type": "url",
+                "value": "https://app.kdksoftware.com/",
+                "playwright": "await page.goto('https://app.kdksoftware.com/');"
+              },
+              "alternatives": []
+            }
+          },
+          {
+            "id": "2znkfe",
+            "action": "navigate",
+            "screen": "DashboardPage",
+            "elementName": "/dashboard",
+            "url": "",
+            "value": "https://app.kdksoftware.com/dashboard",
+            "platform": "web",
+            "placeholder": "",
+            "locator": {
+              "primary": {
+                "type": "url",
+                "value": "https://app.kdksoftware.com/dashboard",
+                "playwright": "await page.goto('https://app.kdksoftware.com/dashboard');"
+              },
+              "alternatives": []
+            }
+          },
+          {
+            "id": "a1n8i9",
+            "action": "click",
+            "screen": "DashboardPage",
+            "elementName": "Frequently Used\nAdd & Invite T",
+            "url": "",
+            "value": "Frequently Used\nAdd & Invite Team Members\nOnboard new staff instantly with email invitations and guided setup.\nFile GSTR-1\nPrepare and file GSTR-1 outward supply returns directly from the platform.\nGoods & Services Tax\nRETURN\n— File & track GST returns\n6\nFile GSTR-1\nPrepare and file GSTR-1 outward supply returns directly from the platform.\nFile GSTR-1A\nPrepare and file GSTR-1 outward supply returns directly from the platform.\nFile GSTR-3B\nFile GSTR-3B monthly summary returns with auto-computed tax liability.\nGSTR-9\nPrepare and file the annual GSTR-9 return summarising all monthly filings.\nGSTR-9C\nFile the GSTR-9C reconciliation statement for taxpayers requiring audit certification.\nTrack Returns\nReal-time status updates on all GST return submissions and filings.\nRECONCILE\n— Match & reconcile purchase data\n3\n2A / 2B Reconciliation\nMatch purchase data with GSTR-2A and 2B to identify mismatches instantly.\nIMS Reco\nInvoice Management System — accept, reject or pend supplier invoices with ease.\nR1 vs EWB\nReconcile GSTR-1 outward supply data against e-Way Bills to spot discrepancies.\nNOTICES & ORDERS\n— Track & respond to GST department notices\n5\nPending for Reply\nView all GST notices awaiting your response before the due date.\nNotices\nManage and respond to GST audit notices issued by the department.\nAudit\nManage and respond to GST audit notices issued by the department.\nOrders\nTrack adjudication orders and demand orders raised against clients.\nIntimation Notices\nView intimations issued by GST authorities for discrepancies and mismatches.\nSHARE REPORTS\n— Download & email reports to clients\n14\nDownload\n2A 2B Reco Report\nExport detailed reconciliation report comparing GSTR-2A and 2B data.\nDownload\nR1 vs EWB Report\nExport GSTR-1 vs e-Way Bill comparison report for audit and filing review.\nDownload\nReturn Register\nDownload a complete register of all GST returns filed across clients and periods.\nDownload\nLedgers\nExport complete ledger data across all clients for books reconciliation and audit.\nDownload\nOnly 2A\nExport ledger data filtered exclusively to GSTR-2A entries for detailed review.\nDownload\nOnly 2B\nExport ledger data filtered exclusively to GSTR-2B entries for ITC reconciliation.\n✉ Email\nGSTR-1 Consolidated Email\nSend a consolidated email of all GSTR-1 filed returns to clients in one go.\n✉ Email\nSend GSTR-3B Draft\nEmail GSTR-3B draft for client review and approval before final filing.\n✉ Email\nGSTR-3B Tax Computation\nEmail auto-computed GSTR-3B tax liability details to clients for verification.\n✉ Email\nAnnual Report: Books vs 3B vs R1\nSend annual comparative report of books GSTR-3B and GSTR-1 to clients.\n✉ Email\nAnnual GSTR-9 Summary\nEmail the annual GSTR-9 return summary to clients for year-end review.\n✉ Email\nGSTR-9 PDF\nGenerate and email the GSTR-9 annual return in PDF format for client records.\n✉ Email\nGSTR-9C PDF\nGenerate and email the GSTR-9C reconciliation statement in PDF for audit use.\n✉ Email\nSend All\nDispatch all the above email reports to clients in a single bulk send action.\nUTILITIES\n— Manage clients, emails & lookups\n3\nAdd Client\nAdd and manage all your GST-registered clients in one place.\nSchedule Email\nAutomate report delivery to clients on schedule without manual follow-ups.\nGSTIN Search\nLook up and validate any GSTIN to verify taxpayer registration details instantly.\nIMPORT TEMPLATES\n— Upload purchase & sales data\n2\nPurchase\nImport purchase data using the standard template for seamless GST filing.\nSales\nImport sales invoice data using the standard template for GSTR-1 preparation.\nSYNC\n— Sync data from Tally & external sources\n2\nTally Purchase\nFetch and sync purchase data directly from Tally with a single click.\nMulti Client Sync\nSync data from multiple clients and accounting platforms simultaneously.\nTax Deducted at Source\nRETURNS & FILING\n— Track, monitor & file TDS returns\n9\nTrack Return Processing\nReal-time status updates on all TDS return submissions and filings.\n138\nFile Form 138 (24Q)Regular\nFile Form 138 (24Q) for quarterly TDS return on salary payments.\n140\nFile Form 140 (26Q)Regular\nFile Form 140 (26Q) for quarterly TDS return on non-salary payments.\n143\nFile Form 143 (27Q)Regular\nFile Form 143 (27Q) for quarterly TDS return on payments to non-residents.\n144\nFile Form 144 (27EQ)Regular\nFile Form 144 (27EQ) for quarterly TCS return on tax collected at source.\n138\nFile Correction 138 (24Q)Correction\nFile a correction return for Form 138 (24Q) to amend errors in the original TDS salary return .\n140\nFile Correction 140 (26Q)Correction\nFile a correction return for Form 140 (26Q) to amend errors in the original non-salary TDS return.\n144\nFile Correction 144 (27EQ)Correction\nFile a correction return for Form 144 (27EQ) to amend errors in the original TCS return.\n143\nFile Correction 143 (27Q)Correction\nFile a correction return for Form 143 (27Q) to amend errors in the original non-resident TDS Return\nCERTIFICATES\n— Generate & verify TDS certificates\n3\nF13\nForm 130 (16)\nGenerate Form 130 salary TDS certificates for employees for the selected period.\nF131\nForm 131 (16A)\nGenerate Form 131 non-salary TDS certificates for all deductees.\nF133\nForm 133 (27D)\nGenerate Form 133 TCS certificates issued to collectors.\nNOTICES\n— Manage TDS notices & orders\n2\nNotices and Orders\nTrack and respond to TDS demand notices before they escalate.\nOutstanding Demand\nView and respond to outstanding TDS demand notices raised by the department.\nPAN UTILITIES\n— Verify & validate PAN numbers\n3\nBulk PAN Verification\nVerify multiple PAN numbers at once to ensure deductee data accuracy.\nSingle PAN Verification\nInstantly verify a single PAN against the Income Tax database.\nLDC - PAN CheckSoon\nValidate PAN against Lower Deduction Certificate for correct TDS rate application.\nCHALLANS\n— Manage TDS challan payments & verification\n4\nVerified Challan\nView all TDS challans successfully verified and matched against BSR records.\nUnverified Challan\nView and action TDS challans pending verification or with mismatches.\nUnconsumed Challan\nTrack challans with remaining balance not yet mapped to any deductee entry.\nCreate New Challan\nGenerate a new TDS payment challan for online or manual deposit.\nUTILITIES\n— Import, masters & TAN management\n7\nTXT\nImport Template / TXT\nImport deductee and challan data via Excel templates or FVU-ready TXT files.\nDownload Template\nDownload Excel import templates for deductee, challan and return data entry.\nAdd TAN\nRegister and manage multiple TANs for different deductors under one account.\nDeductor Master\nCentralised master list of all TDS deductors with organisation and TAN details.\nDeductee Master\nManage master records of all deductees across deductors with PAN and contact details\nMulti Client Sync\nSync TDS data from the portal across multiple deductors simultaneously.\nSalary TDS Estimator\nEstimate the TDS to be deducted for Salaried employees.\nSHARE & DOWNLOAD\n— Mail certificates, reports & download TDS data\n7\nXLS\n138\nDownload Return 138 (24Q)TDS Return\nDownload Form 138 (24Q) TDS return data in Excel or PDF format.\nXLS\n140\nDownload Return 140 (26Q)TDS Return\nDownload Form 140 (26Q) TDS return data in Excel or PDF format.\nXLS\n144\nDownload Return 144 (27EQ)TCS Return\nDownload Form 144 (27EQ) TCS return data in Excel or PDF format.\nXLS\n143\nDownload Return 143 (27Q)TDS Return\nDownload Form 143 (27Q) TDS return data in Excel or PDF format.\nDownload Computation & Health Report\nDownload TDS computation summary and return health check report for compliance review\nDownload Deductor Master\nDownload the complete deductor master list with organisation and TAN details in Excel.\nDownload Deductee Master\nDownload the complete deductee master list with PAN and contact details in Excel format.\nIncome Tax\nPREPARE RETURN\n— Prepare, file & track income tax returns\n4\nTrack Return Processing\nReal-time status updates on all ITR submissions and processing stages.\nFile Original Return\nPrepare and e-file the original ITR for individuals, firms and companies.\nFile Revised Return\nFile a revised ITR to correct errors or omissions in a previously filed return.\nTAR\nFile TAR\nFile Tax Audit Report (Form 3CA/3CB/3CD) directly linked to the ITR.\nFINANCIAL STATEMENTS\n— Prepare statutory financial statements & reports\n2\nSchedule III / Fin Stats for NCE\nAuto-prepare Schedule III compliant balance sheets and financial statements from imported trial balance.\nGenerate Accounting Policies using AI\nUse AI to auto-generate tailored accounting policies for financial statements based on Client data.\nIMPORT\n— Import financial data & statements\n6\nImport Trial Balance\nImport client trial balance data to auto-populate ITR schedules accurately.\nF16\nImport Form 16\nImport employer-issued Form 16 to prefill salary details in the return.\nJSON\nImport JSON\nImport pre-filled or department-generated JSON files into the return.\nImport Capital Gain Statement\nImport broker capital gain statements to auto-compute Schedule CG.\nANN\nImport Annexures\nImport schedule annexures and supporting data for ITR computation.\nTAR\nImport TAR JSON\nImport Tax Audit Report JSON from the IT portal to link directly with the ITR.\nCOMPUTATION\n— Calculate tax & prepare financials\n2\nDownload Computation\nDownload the final tax computation sheet for any client as a PDF for review or filing.\nEmail Computation\nEmail the tax computation sheet directly to the client from within the platform.\nNOTICES\n— Manage income tax notices & orders\n2\nNotices and Orders\nTrack income tax notices and orders across all clients efficiently.\nPending Response\nRespond to and resolve all income tax client notices in one place.\nUTILITIES\n— Manage clients, profiles & tax tools\n9\nAdd Client\nAdd new clients to the ITR module with PAN verification and profile setup.\nClient List\nView and manage all ITR-filing clients with status at a glance.\nIT Section Mapper\nMap any transaction or deduction to the correct Income Tax Act section with ease.\nAdvance Tax\nCompute advance tax liability for clients with automated instalment scheduling.\nPay Challan\nGenerate and pay income tax challans directly — including advance tax and self-assessment tax.\nAuditor Master\nManage auditor profiles linked to clients for TAR and audit report filings.\nMulti Client Sync\nSync data from the IT portal across multiple clients simultaneously in one go.\nAdd Client Bulk\nOnboard multiple clients at once via Excel upload with PAN auto-verification.\nAdd Client by Auto Scan\nAuto-extract client financial data from scanned documents using OCR technology.\nSHARE & DOWNLOAD\n— Download ITR documents, returns & financial reports\n12\nDownload ITR Balance Sheet\nDownload the prepared ITR balance sheet and P&L in Excel or PDF format for client records.\nITR\nITR Form\nDownload the filled ITR form PDF for filing verification and client records.\nTIS\nTIS\nDownload the Tax Information Summary (TIS) for income verification and pre-filing review.\nAIS\nAIS\nDownload the Annual Information Statement (AIS) for comprehensive income data review.\n26AS\n26AS\nDownload Form 26AS for tax credit verification and reconciliation before filing.\nCOMP\nComputation\nDownload the income tax computation sheet in PDF for client sign-off and records.\nOld Regime vs New Regime\nDownload a side-by-side comparison of tax liability under old and new tax regimes.\nFin Stats /Schedule III\nDownload financial statements /Schedule III including P&L and balance sheet prepared for the client.\nJSON\nITR\nITR-JSON\nDownload the ITR JSON file for direct upload to the income tax portal.\nJSON\nTAR\nTAR-JSON\nDownload the Tax Audit Report JSON file for portal submission and e-filing compliance.\nPDF\nTAR\nTAR-PDF\nDownload the Tax Audit Report in PDF format for client review and statutory records.\nDownload Intimations\nDownload income tax intimation notices (143(1), etc.) received from the income tax portal.\nOffice Management\nOVERVIEW\n— Office-wide activity at a glance\n1\nDashboard\nGet a bird's-eye view of invoices, clients, services, and office activity.\nCLIENTS & SYNC\n— Manage & sync clients across modules\n6\nAdd Client\nOnboard new clients into Office Management with full profile and service details.\nGo to Ledger\nView and manage the full financial ledger for any client from one place.\nReceive Payment\nRecord and track incoming payments from clients against outstanding invoices.\nClient Directory\nBrowse and search the full directory of clients with contact and service details.\nPractice Settings\nConfigure your practice profile, prefrences, and default settings for the office.\nSync GST, TDS & ITR Clients\nSync client data across GST, TDS, and ITR modules from one place.\nBILLING\n— Invoices, notes & services\n3\nAdd Service\nDefine and manage the services your practice offers for accurate billing.\nRaise Invoice\nGenerate and send professional invoices to clients directly from the platform.\nIssue Note\nIssue credit or debit notes against invoices with a clear audit trail.\nCLIENT DSC\n— Manage digital signature certificates\n4\nRegister Client DSC\nRegister and link a client's digital signature certificate for e-filing.\nDSC Expiry Tracker\nMonitor expiry dates of all client DSCs and get alerts before they lapse.\nDSC Usage Log\nView a complete log of when and by whom each client DSC was used for signing or filing.\nRevoke/Update DSC\nRevoke an outdated DSC or update it with a renewed certificate for continued e-filing.\nUser Management\nTEAM\n— Add staff & assign clients\n1\nAdd & Invite Team Members\nOnboard new staff instantly with email invitations and guided setup.\nPERMISSIONS\n— Control module & data access\n1\nModule-Level Permissions\nRestrict or allow access to specific modules like GST, TDS, or ITR.\nSECURITY\n— User-level access & permission controls\n2\nChange View Password Permission\nControl which users can view or access client passwords within the platform.\nChange Delete Client Permission\nDefine which team members have the authority to delete client records.\nBooks / 26AS Vs Reco\nClient Master\nLink and sync your complete client master database for reconciliation.\nCreate Client\nAdd new clients directly within the reconciliation module quickly.\nImport Books\nImport accounting books and ledgers with a single click upload.\nExport Reco\nDownload audit-ready reconciliation reports instantly in multiple formats.\nAIS\n26AS\nSync AIS / 26AS Data\nFetch and sync Annual Information Statement and Form 26AS data directly for reconciliation.\nDSC Manager\nDashboard\nManage and monitor all your digital signature certificates from a single dashboard.\nNotices & Orders\nGST\n— GST notices & orders\n1\nGST\nView GST notices and orders. Track clients with pending replies at a glance.\nTDS\n— TDS notices\n1\nTDS\nView TDS notices with client TAN and notice descriptions for quick follow-up.\nITR\n— Income tax notices\n1\nITR\nView income tax notices with client PAN and notice type for timely compliance.\nTeam Collaboration\nGST\n— GST client notifications\n4\nSchedule 2A/2B Email\nSchedule and send automated 2A/2B reconciliation reports to all clients via email.\nSchedule Tally Email\nSchedule and send automated Tally data reports and summaries to clients via email.\nManage GSTR-1 Filed Notification\nNotify clients automatically when their GSTR-1 return is filed successfully.\nNotify on WhatsApp\nSend automated WhatsApp notifications to clients for due dates, filings and compliance updates.\nITR\n— ITR computation sharing\n1\nComputation to Client\nShare the tax computation sheet directly with the client for review and sign-off.\nTask Management\nWORKSPACE & TASKS\n— Track daily work and team progress\n6\nDashboard\nReturn to your main screen to see your overall workload and alerts.\nCreate Task\nAdd a new task and assign it to yourself or your team.\nBoard View\nView your tasks and drag them across columns to update their status.\nMy Tasks\nSee all open tasks that are currently assigned to you.\nOverdue Tasks\nCheck which tasks have crossed their target or statutory deadline.\nCompleted Tasks\nView the history of all finished and closed tasks.\nEMAILS & MEETINGS\n— Client communication and scheduling\n6\nSmart Inbox\nRead and reply to all client emails in one centralized place.\nSync Email\nFetch the latest new emails from your connected accounts.\nAI Tasks\nReview and approve tasks automatically created from incoming emails.\nDraft Email\nUse AI to quickly generate a reply or write a new email.\nSchedule Meeting\nBook a new meeting with a client or your internal team.\nCalendar\nView your scheduled meetings and upcoming deadlines on a visual grid.\nTOOLS & FILES\n— Productivity tools and document management\n4\nDocument Repository\nUpload files, view attachments, and manage all clients folders.\nTemplates\nApply saved checklists for recurring work like GST or ITR filing.\nSticky Notes\nOpen a floating scratchpad to write down quick information during calls.\nAdd Client\nManually add a new client profile into the system.\nUtilities\nQUICK TOOLS\n— Handy lookup & reference tools\n8\nTrack Return Processing(ITR)\nReal-time status updates on all ITR submissions and processing stages across clients.\nTrack Return Processing(TDS)\nReal-time status updates on all TDS submissions and processing stages across clients.\nGST\nTrack Return Processing(GST)\nReal-time status updates on all GST submissions and processing stages across clients.\nTDS Rate Finder\nLook up applicable TDS rates for any section, payment type, or deductee category instantly.\nIT Section Mapper\nMap any transaction or deduction to the correct Income Tax Act section with ease.\nGST Search\nSearch HSN codes, SAC codes, GST rates and exemptions for any goods or service.\nDownload Mobile App\nGet the Spectrum app on Android or iOS — manage GST, TDS, and ITR on the go.\nDownload Connector\nDownload the Spectrum Connector utility to enable seamless desktop integration and data sync.\nSecurity\nUSER PERMISSION TO VIEW CREDENTIALS\n— Control who can access sensitive client credentials\n1\nChange View Password Permission\nControl which users can view or access client passwords within the platform.\nUSER MANAGEMENT – TEAM\n— Add staff & assign clients\n1\nAdd & Invite Team Members\nOnboard new staff instantly with email invitations and guided setup.\nUSER MANAGEMENT – PERMISSIONS\n— Control module & data access\n1\nModule-Level Permissions\nRestrict or allow access to specific modules like GST, TDS, or ITR.\nUSER MANAGEMENT – SECURITY\n— User-level access & permission controls\n2\nChange View Password Permission\nControl which users can view or access client passwords within the platform.\nChange Delete Client Permission\nDefine which team members have the authority to delete client records.",
+            "platform": "web",
+            "placeholder": "",
+            "locator": {
+              "primary": {
+                "type": "css",
+                "value": "html > body > div:nth-of-type(1) > main > div:nth-of-type(2) > div:nth-of-type(1) > main > div:nth-of-type(2) > div",
+                "playwright": "await page.locator('html > body > div:nth-of-type(1) > main > div:nth-of-type(2) > div:nth-of-type(1) > main > div:nth-of-type(2) > div').click()"
+              },
+              "alternatives": [
+                {
+                  "type": "css",
+                  "value": "html > body > div:nth-of-type(1) > main > div:nth-of-type(2) > div:nth-of-type(1) > main > div:nth-of-type(2) > div",
+                  "playwright": "page.locator('html > body > div:nth-of-type(1) > main > div:nth-of-type(2) > div:nth-of-type(1) > main > div:nth-of-type(2) > div')"
+                },
+                {
+                  "type": "xpath",
+                  "value": "/html[1]/body[1]/div[1]/main[1]/div[2]/div[1]/main[1]/div[2]/div[1]",
+                  "playwright": "page.locator('xpath=/html[1]/body[1]/div[1]/main[1]/div[2]/div[1]/main[1]/div[2]/div[1]')"
+                }
+              ]
+            }
+          },
+          {
+            "id": "pn17r",
+            "action": "click",
+            "screen": "DashboardPage",
+            "elementName": "File GSTR-1A",
+            "url": "",
+            "value": "File GSTR-1A",
+            "platform": "web",
+            "placeholder": "",
+            "locator": {
+              "primary": {
+                "type": "css",
+                "value": "html > body > div:nth-of-type(1) > main > div:nth-of-type(2) > div:nth-of-type(1) > main > div:nth-of-type(2) > div > div:nth-of-type(2) > div > div:nth-of-type(1) > ul > li:nth-of-type(2) > div:nth-of-type(1)",
+                "playwright": "await page.locator('html > body > div:nth-of-type(1) > main > div:nth-of-type(2) > div:nth-of-type(1) > main > div:nth-of-type(2) > div > div:nth-of-type(2) > div > div:nth-of-type(1) > ul > li:nth-of-type(2) > div:nth-of-type(1)').click()"
+              },
+              "alternatives": [
+                {
+                  "type": "css",
+                  "value": "html > body > div:nth-of-type(1) > main > div:nth-of-type(2) > div:nth-of-type(1) > main > div:nth-of-type(2) > div > div:nth-of-type(2) > div > div:nth-of-type(1) > ul > li:nth-of-type(2) > div:nth-of-type(1)",
+                  "playwright": "page.locator('html > body > div:nth-of-type(1) > main > div:nth-of-type(2) > div:nth-of-type(1) > main > div:nth-of-type(2) > div > div:nth-of-type(2) > div > div:nth-of-type(1) > ul > li:nth-of-type(2) > div:nth-of-type(1)')"
+                },
+                {
+                  "type": "xpath",
+                  "value": "/html[1]/body[1]/div[1]/main[1]/div[2]/div[1]/main[1]/div[2]/div[1]/div[2]/div[1]/div[1]/ul[1]/li[2]/div[1]",
+                  "playwright": "page.locator('xpath=/html[1]/body[1]/div[1]/main[1]/div[2]/div[1]/main[1]/div[2]/div[1]/div[2]/div[1]/div[1]/ul[1]/li[2]/div[1]')"
+                }
+              ]
+            }
+          },
+          {
+            "id": "5pfna",
+            "action": "hover",
+            "screen": "DashboardPage",
+            "elementName": "Client Master",
+            "url": "",
+            "value": "Client Master",
+            "platform": "web",
+            "placeholder": "",
+            "locator": {
+              "primary": {
+                "type": "role",
+                "value": "[role=\"button\"][name=\"Client Master\"]",
+                "playwright": "await page.getByRole('button', { name: 'Client Master' }).hover()"
+              },
+              "alternatives": [
+                {
+                  "type": "role",
+                  "value": "[role=\"button\"][name=\"Client Master\"]",
+                  "playwright": "page.getByRole('button', { name: 'Client Master' })"
+                },
+                {
+                  "type": "css",
+                  "value": "[role=\"button\"][name*=\"Client Master\"]",
+                  "playwright": "page.locator('[role=\"button\"][name*=\"Client Master\"]')"
+                },
+                {
+                  "type": "xpath",
+                  "value": "/html[1]/body[1]/div[4]/div[1]/div[1]/div[3]/div[2]/button[1]",
+                  "playwright": "page.locator('xpath=/html[1]/body[1]/div[4]/div[1]/div[1]/div[3]/div[2]/button[1]')"
+                }
+              ]
+            }
+          },
+          {
+            "id": "0cabvxn",
+            "action": "click",
+            "screen": "DashboardPage",
+            "elementName": "Close",
+            "url": "",
+            "value": "",
+            "platform": "web",
+            "placeholder": "",
+            "locator": {
+              "primary": {
+                "type": "role",
+                "value": "[role=\"button\"][name=\"Close\"]",
+                "playwright": "await page.getByRole('button', { name: 'Close' }).click()"
+              },
+              "alternatives": [
+                {
+                  "type": "role",
+                  "value": "[role=\"button\"][name=\"Close\"]",
+                  "playwright": "page.getByRole('button', { name: 'Close' })"
+                },
+                {
+                  "type": "css",
+                  "value": "[role=\"button\"][name*=\"Close\"]",
+                  "playwright": "page.locator('[role=\"button\"][name*=\"Close\"]')"
+                },
+                {
+                  "type": "xpath",
+                  "value": "/html[1]/body[1]/div[4]/div[1]/div[1]/div[1]/div[1]/button[1]",
+                  "playwright": "page.locator('xpath=/html[1]/body[1]/div[4]/div[1]/div[1]/div[1]/div[1]/button[1]')"
+                }
+              ]
+            }
+          },
+          {
+            "id": "apkis9",
+            "action": "hover",
+            "screen": "DashboardPage",
+            "elementName": "Close",
+            "url": "",
+            "value": "",
+            "platform": "web",
+            "placeholder": "",
+            "locator": {
+              "primary": {
+                "type": "role",
+                "value": "[role=\"button\"][name=\"Close\"]",
+                "playwright": "await page.getByRole('button', { name: 'Close' }).hover()"
+              },
+              "alternatives": [
+                {
+                  "type": "role",
+                  "value": "[role=\"button\"][name=\"Close\"]",
+                  "playwright": "page.getByRole('button', { name: 'Close' })"
+                },
+                {
+                  "type": "css",
+                  "value": "[role=\"button\"][name*=\"Close\"]",
+                  "playwright": "page.locator('[role=\"button\"][name*=\"Close\"]')"
+                },
+                {
+                  "type": "xpath",
+                  "value": "/div[1]/div[1]/div[1]/div[1]/div[1]/button[1]",
+                  "playwright": "page.locator('xpath=/div[1]/div[1]/div[1]/div[1]/div[1]/button[1]')"
+                }
+              ]
+            }
+          },
+          {
+            "id": "dn257i",
+            "action": "click",
+            "screen": "DashboardPage",
+            "elementName": "User Management",
+            "url": "",
+            "value": "User Management",
+            "platform": "web",
+            "placeholder": "",
+            "locator": {
+              "primary": {
+                "type": "css",
+                "value": "html > body > div:nth-of-type(1) > main > div:nth-of-type(2) > div:nth-of-type(1) > nav > div:nth-of-type(2) > div:nth-of-type(7) > div > span:nth-of-type(2)",
+                "playwright": "await page.locator('html > body > div:nth-of-type(1) > main > div:nth-of-type(2) > div:nth-of-type(1) > nav > div:nth-of-type(2) > div:nth-of-type(7) > div > span:nth-of-type(2)').click()"
+              },
+              "alternatives": [
+                {
+                  "type": "css",
+                  "value": "html > body > div:nth-of-type(1) > main > div:nth-of-type(2) > div:nth-of-type(1) > nav > div:nth-of-type(2) > div:nth-of-type(7) > div > span:nth-of-type(2)",
+                  "playwright": "page.locator('html > body > div:nth-of-type(1) > main > div:nth-of-type(2) > div:nth-of-type(1) > nav > div:nth-of-type(2) > div:nth-of-type(7) > div > span:nth-of-type(2)')"
+                },
+                {
+                  "type": "xpath",
+                  "value": "/html[1]/body[1]/div[1]/main[1]/div[2]/div[1]/nav[1]/div[2]/div[7]/div[1]/span[2]",
+                  "playwright": "page.locator('xpath=/html[1]/body[1]/div[1]/main[1]/div[2]/div[1]/nav[1]/div[2]/div[7]/div[1]/span[2]')"
+                }
+              ]
+            }
+          },
+          {
+            "id": "m7idag",
+            "action": "click",
+            "screen": "DashboardPage",
+            "elementName": "Add & Invite Team Members",
+            "url": "",
+            "value": "Add & Invite Team Members",
+            "platform": "web",
+            "placeholder": "",
+            "locator": {
+              "primary": {
+                "type": "css",
+                "value": "html > body > div:nth-of-type(1) > main > div:nth-of-type(2) > div:nth-of-type(1) > main > div:nth-of-type(2) > div > div:nth-of-type(6) > div > div:nth-of-type(1) > ul > li > div:nth-of-type(1)",
+                "playwright": "await page.locator('html > body > div:nth-of-type(1) > main > div:nth-of-type(2) > div:nth-of-type(1) > main > div:nth-of-type(2) > div > div:nth-of-type(6) > div > div:nth-of-type(1) > ul > li > div:nth-of-type(1)').click()"
+              },
+              "alternatives": [
+                {
+                  "type": "css",
+                  "value": "html > body > div:nth-of-type(1) > main > div:nth-of-type(2) > div:nth-of-type(1) > main > div:nth-of-type(2) > div > div:nth-of-type(6) > div > div:nth-of-type(1) > ul > li > div:nth-of-type(1)",
+                  "playwright": "page.locator('html > body > div:nth-of-type(1) > main > div:nth-of-type(2) > div:nth-of-type(1) > main > div:nth-of-type(2) > div > div:nth-of-type(6) > div > div:nth-of-type(1) > ul > li > div:nth-of-type(1)')"
+                },
+                {
+                  "type": "xpath",
+                  "value": "/html[1]/body[1]/div[1]/main[1]/div[2]/div[1]/main[1]/div[2]/div[1]/div[6]/div[1]/div[1]/ul[1]/li[1]/div[1]",
+                  "playwright": "page.locator('xpath=/html[1]/body[1]/div[1]/main[1]/div[2]/div[1]/main[1]/div[2]/div[1]/div[6]/div[1]/div[1]/ul[1]/li[1]/div[1]')"
+                }
+              ]
+            }
+          },
+          {
+            "id": "1egfo",
+            "action": "navigate",
+            "screen": "UserManagementPage",
+            "elementName": "/user-management",
+            "url": "",
+            "value": "https://app.kdksoftware.com/user-management?add_client=true",
+            "platform": "web",
+            "placeholder": "",
+            "locator": {
+              "primary": {
+                "type": "url",
+                "value": "https://app.kdksoftware.com/user-management?add_client=true",
+                "playwright": "await page.goto('https://app.kdksoftware.com/user-management?add_client=true');"
+              },
+              "alternatives": []
+            }
+          },
+          {
+            "id": "qw9cj8",
+            "action": "click",
+            "screen": "UserManagementPage",
+            "elementName": "Continue",
+            "url": "",
+            "value": "Continue",
+            "platform": "web",
+            "placeholder": "",
+            "locator": {
+              "primary": {
+                "type": "role",
+                "value": "[role=\"button\"][name=\"Continue\"]",
+                "playwright": "await page.getByRole('button', { name: 'Continue' }).click()"
+              },
+              "alternatives": [
+                {
+                  "type": "role",
+                  "value": "[role=\"button\"][name=\"Continue\"]",
+                  "playwright": "page.getByRole('button', { name: 'Continue' })"
+                },
+                {
+                  "type": "css",
+                  "value": "[role=\"button\"][name*=\"Continue\"]",
+                  "playwright": "page.locator('[role=\"button\"][name*=\"Continue\"]')"
+                },
+                {
+                  "type": "xpath",
+                  "value": "/html[1]/body[1]/div[1]/main[1]/div[1]/div[2]/div[1]/div[1]/div[1]/div[2]/div[2]/div[1]/button[1]",
+                  "playwright": "page.locator('xpath=/html[1]/body[1]/div[1]/main[1]/div[1]/div[2]/div[1]/div[1]/div[1]/div[2]/div[2]/div[1]/button[1]')"
+                }
+              ]
+            }
+          },
+          {
+            "id": "lp42xiu",
+            "action": "hover",
+            "screen": "UserManagementPage",
+            "elementName": "Continue",
+            "url": "",
+            "value": "Continue",
+            "platform": "web",
+            "placeholder": "",
+            "locator": {
+              "primary": {
+                "type": "role",
+                "value": "[role=\"button\"][name=\"Continue\"]",
+                "playwright": "await page.getByRole('button', { name: 'Continue' }).hover()"
+              },
+              "alternatives": [
+                {
+                  "type": "role",
+                  "value": "[role=\"button\"][name=\"Continue\"]",
+                  "playwright": "page.getByRole('button', { name: 'Continue' })"
+                },
+                {
+                  "type": "css",
+                  "value": "[role=\"button\"][name*=\"Continue\"]",
+                  "playwright": "page.locator('[role=\"button\"][name*=\"Continue\"]')"
+                },
+                {
+                  "type": "xpath",
+                  "value": "/div[1]/div[1]/div[1]/div[2]/div[2]/div[1]/button[1]",
+                  "playwright": "page.locator('xpath=/div[1]/div[1]/div[1]/div[2]/div[2]/div[1]/button[1]')"
+                }
+              ]
+            }
+          },
+          {
+            "id": "2u101",
+            "action": "click",
+            "screen": "UserManagementPage",
+            "elementName": "Enter Mobile Number",
+            "url": "",
+            "value": "",
+            "platform": "web",
+            "placeholder": "",
+            "locator": {
+              "primary": {
+                "type": "placeholder",
+                "value": "[placeholder=\"Enter Mobile Number\"]",
+                "playwright": "await page.getByPlaceholder('Enter Mobile Number').click()"
+              },
+              "alternatives": [
+                {
+                  "type": "placeholder",
+                  "value": "[placeholder=\"Enter Mobile Number\"]",
+                  "playwright": "page.getByPlaceholder('Enter Mobile Number')"
+                },
+                {
+                  "type": "css",
+                  "value": "[name=\"Mobile\"]",
+                  "playwright": "page.locator('[name=\"Mobile\"]')"
+                },
+                {
+                  "type": "xpath",
+                  "value": "/html[1]/body[1]/div[4]/div[1]/div[1]/div[2]/div[1]/div[1]/div[1]/div[1]/div[1]/div[1]/div[2]/div[1]/input[1]",
+                  "playwright": "page.locator('xpath=/html[1]/body[1]/div[4]/div[1]/div[1]/div[2]/div[1]/div[1]/div[1]/div[1]/div[1]/div[1]/div[2]/div[1]/input[1]')"
+                }
+              ]
+            }
+          },
+          {
+            "id": "zvzgxc",
+            "action": "hover",
+            "screen": "UserManagementPage",
+            "elementName": "Enter Mobile Number",
+            "url": "",
+            "value": "",
+            "platform": "web",
+            "placeholder": "",
+            "locator": {
+              "primary": {
+                "type": "placeholder",
+                "value": "[placeholder=\"Enter Mobile Number\"]",
+                "playwright": "await page.getByPlaceholder('Enter Mobile Number').hover()"
+              },
+              "alternatives": [
+                {
+                  "type": "placeholder",
+                  "value": "[placeholder=\"Enter Mobile Number\"]",
+                  "playwright": "page.getByPlaceholder('Enter Mobile Number')"
+                },
+                {
+                  "type": "css",
+                  "value": "[name=\"Mobile\"]",
+                  "playwright": "page.locator('[name=\"Mobile\"]')"
+                },
+                {
+                  "type": "xpath",
+                  "value": "/html[1]/body[1]/div[4]/div[1]/div[1]/div[2]/div[1]/div[1]/div[1]/div[1]/div[1]/div[1]/div[2]/div[1]/input[1]",
+                  "playwright": "page.locator('xpath=/html[1]/body[1]/div[4]/div[1]/div[1]/div[2]/div[1]/div[1]/div[1]/div[1]/div[1]/div[1]/div[2]/div[1]/input[1]')"
+                }
+              ]
+            }
+          },
+          {
+            "id": "yziecs",
+            "action": "fill",
+            "screen": "UserManagementPage",
+            "elementName": "Enter Mobile Number",
+            "url": "",
+            "value": "",
+            "platform": "web",
+            "placeholder": "",
+            "locator": {
+              "primary": {
+                "type": "placeholder",
+                "value": "[placeholder=\"Enter Mobile Number\"]",
+                "playwright": "await page.getByPlaceholder('Enter Mobile Number').fill('')"
+              },
+              "alternatives": [
+                {
+                  "type": "placeholder",
+                  "value": "[placeholder=\"Enter Mobile Number\"]",
+                  "playwright": "page.getByPlaceholder('Enter Mobile Number')"
+                },
+                {
+                  "type": "css",
+                  "value": "[name=\"Mobile\"]",
+                  "playwright": "page.locator('[name=\"Mobile\"]')"
+                },
+                {
+                  "type": "xpath",
+                  "value": "/html[1]/body[1]/div[4]/div[1]/div[1]/div[2]/div[1]/div[1]/div[1]/div[1]/div[1]/div[1]/div[2]/div[1]/input[1]",
+                  "playwright": "page.locator('xpath=/html[1]/body[1]/div[4]/div[1]/div[1]/div[2]/div[1]/div[1]/div[1]/div[1]/div[1]/div[1]/div[2]/div[1]/input[1]')"
+                }
+              ]
+            }
+          },
+          {
+            "id": "faunw",
+            "action": "hover",
+            "screen": "UserManagementPage",
+            "elementName": "Close",
+            "url": "",
+            "value": "",
+            "platform": "web",
+            "placeholder": "",
+            "locator": {
+              "primary": {
+                "type": "role",
+                "value": "[role=\"button\"][name=\"Close\"]",
+                "playwright": "await page.getByRole('button', { name: 'Close' }).hover()"
+              },
+              "alternatives": [
+                {
+                  "type": "role",
+                  "value": "[role=\"button\"][name=\"Close\"]",
+                  "playwright": "page.getByRole('button', { name: 'Close' })"
+                },
+                {
+                  "type": "css",
+                  "value": "[role=\"button\"][name*=\"Close\"]",
+                  "playwright": "page.locator('[role=\"button\"][name*=\"Close\"]')"
+                },
+                {
+                  "type": "xpath",
+                  "value": "/html[1]/body[1]/div[4]/div[1]/div[1]/div[1]/button[1]",
+                  "playwright": "page.locator('xpath=/html[1]/body[1]/div[4]/div[1]/div[1]/div[1]/button[1]')"
+                }
+              ]
+            }
+          },
+          {
+            "id": "ln2oas",
+            "action": "click",
+            "screen": "UserManagementPage",
+            "elementName": "Close",
+            "url": "",
+            "value": "",
+            "platform": "web",
+            "placeholder": "",
+            "locator": {
+              "primary": {
+                "type": "role",
+                "value": "[role=\"button\"][name=\"Close\"]",
+                "playwright": "await page.getByRole('button', { name: 'Close' }).click()"
+              },
+              "alternatives": [
+                {
+                  "type": "role",
+                  "value": "[role=\"button\"][name=\"Close\"]",
+                  "playwright": "page.getByRole('button', { name: 'Close' })"
+                },
+                {
+                  "type": "css",
+                  "value": "[role=\"button\"][name*=\"Close\"]",
+                  "playwright": "page.locator('[role=\"button\"][name*=\"Close\"]')"
+                },
+                {
+                  "type": "xpath",
+                  "value": "/html[1]/body[1]/div[4]/div[1]/div[1]/div[1]/button[1]",
+                  "playwright": "page.locator('xpath=/html[1]/body[1]/div[4]/div[1]/div[1]/div[1]/button[1]')"
+                }
+              ]
+            }
+          },
+          {
+            "id": "94trvuj",
+            "action": "hover",
+            "screen": "UserManagementPage",
+            "elementName": "navbardrop",
+            "url": "",
+            "value": "",
+            "platform": "web",
+            "placeholder": "",
+            "locator": {
+              "primary": {
+                "type": "css",
+                "value": "#navbardrop",
+                "playwright": "await page.locator('#navbardrop').hover()"
+              },
+              "alternatives": [
+                {
+                  "type": "css",
+                  "value": "#navbardrop",
+                  "playwright": "page.locator('#navbardrop')"
+                },
+                {
+                  "type": "xpath",
+                  "value": "//*[@id=\"navbardrop\"]",
+                  "playwright": "page.locator('xpath=//*[@id=\"navbardrop\"]')"
+                }
+              ]
+            }
+          }
+        ],
+        "pomStructure": "// --- LoginPage Object ---\nclass LoginPage {\n  constructor(private page: Page) {}\n  // NAVIGATE: Target Application Page\n  async navigate_target_application_page() {\n    await page.goto('https://app.kdksoftware.com/login');\n  }\n\n  // HOVER: Enter mobile number\n  async hover_enter_mobile_number() {\n    await page.getByPlaceholder('Enter mobile number').hover()\n  }\n\n  // CLICK: Enter mobile number\n  async click_enter_mobile_number() {\n    await page.getByPlaceholder('Enter mobile number').click()\n  }\n\n  // FILL: Enter mobile number\n  async fill_enter_mobile_number() {\n    await page.getByPlaceholder('Enter mobile number').fill('8122')\n  }\n\n  // HOVER: Enter password\n  async hover_enter_password() {\n    await page.getByPlaceholder('Enter password').hover()\n  }\n\n  // CLICK: Enter password\n  async click_enter_password() {\n    await page.getByPlaceholder('Enter password').click()\n  }\n\n  // FILL: Enter password\n  async fill_enter_password() {\n    await page.getByPlaceholder('Enter password').fill('********')\n  }\n\n  // CLICK: Show password\n  async click_show_password() {\n    await page.getByRole('button', { name: 'Show password' }).click()\n  }\n\n  // HOVER: Hide password\n  async hover_hide_password() {\n    await page.getByRole('button', { name: 'Hide password' }).hover()\n  }\n\n  // CLICK: Login to Dashboard\n→\n  async click_login_to_dashboard__() {\n    await page.getByRole('button', { name: 'Login to Dashboard\n→' }).click()\n  }\n\n  // SUBMIT: Mobile Number\n+91\nPassword\nFor\n  async submit_mobile_number__91_password_for() {\n    await page.locator('html > body > div:nth-of-type(1) > main > div:nth-of-type(1) > div > section:nth-of-type(2) > form')\n  }\n\n  // HOVER: Login to Dashboard\n→\n  async hover_login_to_dashboard__() {\n    await page.getByRole('button', { name: 'Login to Dashboard\n→' }).hover()\n  }\n\n  // NAVIGATE: Home Page\n  async navigate_home_page() {\n    await page.goto('https://app.kdksoftware.com/');\n  }\n}\n\n// --- DashboardPage Object ---\nclass DashboardPage {\n  constructor(private page: Page) {}\n  // NAVIGATE: /dashboard\n  async navigate__dashboard() {\n    await page.goto('https://app.kdksoftware.com/dashboard');\n  }\n\n  // CLICK: Frequently Used\nAdd & Invite T\n  async click_frequently_used_add___invite_t() {\n    await page.locator('html > body > div:nth-of-type(1) > main > div:nth-of-type(2) > div:nth-of-type(1) > main > div:nth-of-type(2) > div').click()\n  }\n\n  // CLICK: File GSTR-1A\n  async click_file_gstr_1a() {\n    await page.locator('html > body > div:nth-of-type(1) > main > div:nth-of-type(2) > div:nth-of-type(1) > main > div:nth-of-type(2) > div > div:nth-of-type(2) > div > div:nth-of-type(1) > ul > li:nth-of-type(2) > div:nth-of-type(1)').click()\n  }\n\n  // HOVER: Client Master\n  async hover_client_master() {\n    await page.getByRole('button', { name: 'Client Master' }).hover()\n  }\n\n  // CLICK: Close\n  async click_close() {\n    await page.getByRole('button', { name: 'Close' }).click()\n  }\n\n  // HOVER: Close\n  async hover_close() {\n    await page.getByRole('button', { name: 'Close' }).hover()\n  }\n\n  // CLICK: User Management\n  async click_user_management() {\n    await page.locator('html > body > div:nth-of-type(1) > main > div:nth-of-type(2) > div:nth-of-type(1) > nav > div:nth-of-type(2) > div:nth-of-type(7) > div > span:nth-of-type(2)').click()\n  }\n\n  // CLICK: Add & Invite Team Members\n  async click_add___invite_team_members() {\n    await page.locator('html > body > div:nth-of-type(1) > main > div:nth-of-type(2) > div:nth-of-type(1) > main > div:nth-of-type(2) > div > div:nth-of-type(6) > div > div:nth-of-type(1) > ul > li > div:nth-of-type(1)').click()\n  }\n}\n\n// --- UserManagementPage Object ---\nclass UserManagementPage {\n  constructor(private page: Page) {}\n  // NAVIGATE: /user-management\n  async navigate__user_management() {\n    await page.goto('https://app.kdksoftware.com/user-management?add_client=true');\n  }\n\n  // CLICK: Continue\n  async click_continue() {\n    await page.getByRole('button', { name: 'Continue' }).click()\n  }\n\n  // HOVER: Continue\n  async hover_continue() {\n    await page.getByRole('button', { name: 'Continue' }).hover()\n  }\n\n  // CLICK: Enter Mobile Number\n  async click_enter_mobile_number() {\n    await page.getByPlaceholder('Enter Mobile Number').click()\n  }\n\n  // HOVER: Enter Mobile Number\n  async hover_enter_mobile_number() {\n    await page.getByPlaceholder('Enter Mobile Number').hover()\n  }\n\n  // FILL: Enter Mobile Number\n  async fill_enter_mobile_number() {\n    await page.getByPlaceholder('Enter Mobile Number').fill('')\n  }\n\n  // HOVER: Close\n  async hover_close() {\n    await page.getByRole('button', { name: 'Close' }).hover()\n  }\n\n  // CLICK: Close\n  async click_close() {\n    await page.getByRole('button', { name: 'Close' }).click()\n  }\n\n  // HOVER: navbardrop\n  async hover_navbardrop() {\n    await page.locator('#navbardrop').hover()\n  }\n}\n",
+        "suggestedTitle": "New Recording Flow - Enhanced Test Flow",
+        "explanation": "Successfully optimized 30 recorded steps into Page Object Model structure with clean locators."
+      },
+      "timestamp": 1788256114869,
+      "hits": 0,
+      "executionTimeMs": 10916
     }
   ],
   "hitsCount": 3,
-  "missesCount": 67,
+  "missesCount": 76,
   "totalSavedTimeMs": 43459,
-  "savedAt": "2026-08-31T06:05:44.193Z"
+  "savedAt": "2026-09-01T09:48:34.869Z"
 }

@@ -152,7 +152,7 @@ async function getElementAtCoordinates(deviceId, x, y) {
     const nodeRegex = /<node\s+([^>]*)\s*bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"([^>]*)\/?>/g;
     let match;
     let bestNodeAttributes = null;
-    let smallestArea = Infinity;
+    let bestScore = Infinity;
 
     while ((match = nodeRegex.exec(xmlContent)) !== null) {
       const allAttrs = (match[1] + ' ' + match[6]).trim();
@@ -177,14 +177,20 @@ async function getElementAtCoordinates(deviceId, x, y) {
         const hasText = !!getAttr('text');
         const hasDesc = !!getAttr('content-desc');
 
-        // Prefer clickable or labeled elements
-        let areaScore = area;
-        if (isClickable || hasText || hasDesc) {
-          areaScore = area * 0.8; // Give priority
-        }
+        const hasResourceId = !!getAttr('resource-id');
+        // Semantic/clickable nodes are far more useful than a tiny anonymous
+        // child view. Area only breaks ties inside the same quality tier.
+        const qualityTier = isClickable && hasResourceId ? 0
+          : isClickable && hasDesc ? 1
+            : isClickable && hasText ? 2
+              : hasResourceId ? 3
+                : hasDesc ? 4
+                  : hasText ? 5
+                    : isClickable ? 6 : 7;
+        const areaScore = qualityTier * 1e12 + area;
 
-        if (areaScore < smallestArea) {
-          smallestArea = areaScore;
+        if (areaScore < bestScore) {
+          bestScore = areaScore;
           bestNodeAttributes = {
             resourceId: getAttr('resource-id'),
             contentDescription: getAttr('content-desc'),
@@ -200,31 +206,32 @@ async function getElementAtCoordinates(deviceId, x, y) {
     if (!bestNodeAttributes) return null;
 
     const { resourceId, contentDescription, text, className } = bestNodeAttributes;
+    const isAndroidSystemSurface = /^android:id\/(?:navigationBarBackground|statusBarBackground|content)$/i.test(resourceId);
+    const hasStableSemanticLocator = !!(resourceId || contentDescription || text);
+    // Containers, root canvas views and Android system bars are not the
+    // control the user intended to tap. Returning null makes the recorder use
+    // its coordinate fallback instead of emitting a misleading XPath.
+    if (isAndroidSystemSurface || !hasStableSemanticLocator) return null;
     let xpath = '';
     let primaryType = 'xpath';
     let primaryValue = '';
     let playwrightScript = '';
 
-    if (text) {
-      primaryType = 'text';
-      primaryValue = text;
-      xpath = `//*[@text="${text}"]`;
-      playwrightScript = `const el = await driver.elementByXPath("//*[@text='${text}']");\nawait el.click();`;
+    if (resourceId) {
+      primaryType = 'resource-id';
+      primaryValue = resourceId;
+      xpath = `//*[@resource-id="${resourceId}"]`;
+      playwrightScript = `await driver.elementById("${resourceId}").click();`;
     } else if (contentDescription) {
       primaryType = 'accessibility-id';
       primaryValue = contentDescription;
       xpath = `//*[@content-desc="${contentDescription}"]`;
       playwrightScript = `await driver.elementByAccessibilityId("${contentDescription}").click();`;
-    } else if (resourceId) {
-      primaryType = 'resource-id';
-      primaryValue = resourceId;
-      xpath = `//*[@resource-id="${resourceId}"]`;
-      playwrightScript = `await driver.elementById("${resourceId}").click();`;
-    } else {
-      primaryType = 'xpath';
-      primaryValue = `//${className}[@bounds="${bestNodeAttributes.bounds}"]`;
-      xpath = primaryValue;
-      playwrightScript = `await driver.elementByXPath("${xpath}").click();`;
+    } else if (text) {
+      primaryType = 'text';
+      primaryValue = text;
+      xpath = `//*[@text="${text}"]`;
+      playwrightScript = `const el = await driver.elementByXPath("//*[@text='${text}']");\nawait el.click();`;
     }
 
     return {
@@ -593,7 +600,7 @@ async function handlePhysicalEmulatorTap(deviceId, x, y) {
     console.log(`[ADB Tap Event] Detected physical tap at coordinates (${x}, ${y}) on ${deviceId}`);
     const locatorAttr = await getElementAtCoordinates(deviceId, x, y);
     
-    const labelName = getAndroidElementName(locatorAttr) || `Unlabelled Android element`;
+    const labelName = getAndroidElementName(locatorAttr) || `Screen position`;
     const playwrightCode = locatorAttr?.playwrightScript || `await driver.touchPerform([{ action: 'tap', options: { x: ${x}, y: ${y} } }]);`;
 
     const stepPayload = {
@@ -605,15 +612,16 @@ async function handlePhysicalEmulatorTap(deviceId, x, y) {
         elementName: labelName,
         locator: {
           primary: {
-            type: locatorAttr?.primaryType || 'xpath',
-            value: locatorAttr?.primaryValue || locatorAttr?.xpath || `//android.view.View[@bounds="[${x},${y}]"]`,
+            type: locatorAttr?.primaryType || 'coordinates',
+            value: locatorAttr?.primaryValue || locatorAttr?.xpath || JSON.stringify({ x, y, unit: 'pixels' }),
             playwright: playwrightCode
           },
           alternatives: [
             locatorAttr?.text ? { type: 'text', value: locatorAttr.text } : null,
             locatorAttr?.accessibilityId ? { type: 'accessibility-id', value: locatorAttr.accessibilityId } : null,
             locatorAttr?.resourceId ? { type: 'resource-id', value: locatorAttr.resourceId } : null,
-            locatorAttr?.xpath ? { type: 'xpath', value: locatorAttr.xpath } : null
+            locatorAttr?.xpath ? { type: 'xpath', value: locatorAttr.xpath } : null,
+            { type: 'coordinates', value: JSON.stringify({ x, y, unit: 'pixels' }) }
           ].filter(Boolean)
         },
         screen: "ActiveScreen",
@@ -844,7 +852,7 @@ async function startStreamingAndCommandPolling() {
               url: 'ADB'
             }).catch(() => {});
 
-            const labelName = getAndroidElementName(locatorAttr) || 'Unlabelled Android element';
+            const labelName = getAndroidElementName(locatorAttr) || 'Screen position';
             const stepPayload = {
               email: userEmail,
               event: {
@@ -854,8 +862,8 @@ async function startStreamingAndCommandPolling() {
                 elementName: labelName,
                 locator: {
                   primary: {
-                    type: locatorAttr?.primaryType || 'xpath',
-                    value: locatorAttr?.primaryValue || locatorAttr?.xpath || `//android.view.View`,
+                    type: locatorAttr?.primaryType || 'coordinates',
+                    value: locatorAttr?.primaryValue || locatorAttr?.xpath || JSON.stringify({ x: params.x, y: params.y, unit: 'pixels' }),
                     playwright: locatorAttr?.playwrightScript || ((action === 'click' || action === 'tap')
                       ? `await driver.touchPerform([{ action: 'tap', options: { x: ${params.x}, y: ${params.y} } }]);`
                       : action === 'fill' || action === 'type'
@@ -866,7 +874,10 @@ async function startStreamingAndCommandPolling() {
                     locatorAttr?.text ? { type: 'text', value: locatorAttr.text } : null,
                     locatorAttr?.accessibilityId ? { type: 'accessibility-id', value: locatorAttr.accessibilityId } : null,
                     locatorAttr?.resourceId ? { type: 'resource-id', value: locatorAttr.resourceId } : null,
-                    locatorAttr?.xpath ? { type: 'xpath', value: locatorAttr.xpath } : null
+                    locatorAttr?.xpath ? { type: 'xpath', value: locatorAttr.xpath } : null,
+                    params.x !== undefined && params.y !== undefined
+                      ? { type: 'coordinates', value: JSON.stringify({ x: params.x, y: params.y, unit: 'pixels' }) }
+                      : null
                   ].filter(Boolean)
                 },
                 screen: "ActiveScreen",

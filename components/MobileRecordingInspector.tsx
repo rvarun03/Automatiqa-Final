@@ -4275,10 +4275,12 @@ export const MobileRecordingInspector: React.FC<MobileRecordingInspectorProps> =
     // onRecordElement can cause the browser click to be lost altogether.
     const coordinateElem: MobileElementInfo = {
       id: `coordinate-${deviceX}-${deviceY}-${Date.now()}`,
-      name: 'Resolving Android element…',
+      name: 'Screen position',
       type: 'android.view.View',
       resourceId: '',
-      xpath: `//android.view.View[@bounds="[${deviceX},${deviceY}]"]`,
+      // A point is not an Android node. Keep XPath empty so the recorder uses
+      // the explicit coordinate fallback instead of persisting a fake locator.
+      xpath: '',
       bounds: `[${deviceX},${deviceY}][${deviceX},${deviceY}]`,
       screen: activeTab || 'MAIN',
       clickable: true,
@@ -4330,6 +4332,12 @@ export const MobileRecordingInspector: React.FC<MobileRecordingInspectorProps> =
       const text = node.getAttribute('text') || '';
       const accessibilityId = node.getAttribute('content-desc') || '';
       const type = node.tagName;
+      if (/^android:id\/(?:navigationBarBackground|statusBarBackground|content)$/i.test(resourceId)) {
+        throw new Error('Ignoring Android system surface');
+      }
+      if (!resourceId && !text && !accessibilityId) {
+        throw new Error('Tapped container has no stable semantic locator');
+      }
       const locatorPredicate = resourceId
         ? `@resource-id="${resourceId}"`
         : accessibilityId

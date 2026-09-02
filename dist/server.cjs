@@ -7307,18 +7307,6 @@ async function startServer() {
       publishRecordedStep(sessionId, event);
     }).catch(() => {
     });
-    await page.exposeFunction("relayPermissionRequest", (permName) => {
-      const perms = (permName || "camera").split(",").map((s) => s.trim()).filter(Boolean);
-      console.log(`[Playwright Permission Intercept] Session ${sessionId} requested:`, perms);
-      io.emit("PERMISSION_REQUIRED", {
-        sessionId,
-        permissions: perms,
-        origin: page.url(),
-        reason: `The web application is requesting browser permission for ${perms.join(" & ")}.`,
-        timestamp: Date.now()
-      });
-    }).catch(() => {
-    });
     const recorderClientFunction = (sessId) => {
       var __name = typeof window.__name !== "undefined" ? window.__name : function(t, v) {
         return t;
@@ -7401,44 +7389,6 @@ async function startServer() {
             frameName: window.name || "",
             frameSelector: "iframe",
             frameUrl: window.location.href
-          };
-        }
-      }
-      if (!window.__PERM_TRAP_ATTACHED__) {
-        window.__PERM_TRAP_ATTACHED__ = true;
-        if (navigator.permissions && navigator.permissions.query) {
-          const origQuery = navigator.permissions.query.bind(navigator.permissions);
-          navigator.permissions.query = function(p) {
-            if (["camera", "microphone", "geolocation", "notifications", "clipboard-read", "clipboard-write"].includes(p?.name)) {
-              window.relayPermissionRequest && window.relayPermissionRequest(p.name);
-            }
-            return origQuery(p);
-          };
-        }
-        if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
-          const origGUM = navigator.mediaDevices.getUserMedia.bind(navigator.mediaDevices);
-          navigator.mediaDevices.getUserMedia = function(constraints) {
-            const requested = [];
-            if (constraints.video) requested.push("camera");
-            if (constraints.audio) requested.push("microphone");
-            if (requested.length > 0) {
-              window.relayPermissionRequest && window.relayPermissionRequest(requested.join(","));
-            }
-            return origGUM(constraints);
-          };
-        }
-        if (navigator.geolocation && navigator.geolocation.getCurrentPosition) {
-          const origGeo = navigator.geolocation.getCurrentPosition.bind(navigator.geolocation);
-          navigator.geolocation.getCurrentPosition = function(success, error, opts) {
-            window.relayPermissionRequest && window.relayPermissionRequest("geolocation");
-            return origGeo(success, error, opts);
-          };
-        }
-        if (window.Notification && window.Notification.requestPermission) {
-          const origNotify = window.Notification.requestPermission.bind(window.Notification);
-          window.Notification.requestPermission = function() {
-            window.relayPermissionRequest && window.relayPermissionRequest("notifications");
-            return origNotify();
           };
         }
       }
@@ -9865,17 +9815,23 @@ ${html}`;
         };
         const validPerms = permsToGrant.map((p) => playwrightPermMap[p.toLowerCase()] || p).filter(Boolean);
         if (validPerms.length > 0) {
-          await session.context.grantPermissions(validPerms, origin ? { origin } : void 0).catch((err) => {
-            console.warn("[Playwright] grantPermissions warning:", err.message);
-          });
+          let permissionOrigin;
+          try {
+            permissionOrigin = origin ? new URL(unwrapProxyUrl(origin)).origin : void 0;
+          } catch (e) {
+            permissionOrigin = void 0;
+          }
+          await session.context.grantPermissions(validPerms, permissionOrigin ? { origin: permissionOrigin } : void 0);
         }
       }
       session.grantedPermissions = Array.from(/* @__PURE__ */ new Set([...session.grantedPermissions || [], ...permsToGrant]));
+      session.status = "RECORDING";
       io.emit("PERMISSION_GRANTED", {
         sessionId,
         permissions: permsToGrant,
         origin
       });
+      io.emit("RECORDING_READY", { sessionId, origin, permissions: permsToGrant });
       return res.json({ success: true, grantedPermissions: session.grantedPermissions });
     } catch (err) {
       console.error("Failed to grant permission:", err);
@@ -10440,6 +10396,8 @@ ${html}`;
         platform: eventData.platform || "web",
         timestamp: eventData.timestamp || Date.now(),
         masked: Boolean(eventData.masked),
+        originalValue: eventData.originalValue,
+        encryptedValue: eventData.encryptedValue,
         targetBox: eventData.targetBox,
         coordinates: eventData.coordinates,
         screenshot: eventData.screenshot,
@@ -10472,6 +10430,45 @@ ${html}`;
     }
     const session = sessions.get(sessionId);
     if (session) {
+      let webStorageState = void 0;
+      if (session.platform === "web" && session.context) {
+        webStorageState = await session.context.storageState().catch((err) => {
+          console.warn(`Could not capture web storage state for session ${sessionId}:`, err?.message || err);
+          return void 0;
+        });
+      }
+      if (session.platform === "web" && req.headers.cookie) {
+        const targetOrigins = /* @__PURE__ */ new Set();
+        [session.initialUrl, session.url, ...session.steps.flatMap((step) => [step.url, step.action === "navigate" ? step.value : ""])].filter(Boolean).forEach((candidate) => {
+          try {
+            targetOrigins.add(new URL(unwrapProxyUrl(candidate)).origin);
+          } catch (e) {
+          }
+        });
+        const ignoredCookie = /^(?:qa_last_target_origin|connect\.sid|io|__.*)$/i;
+        const requestCookies = req.headers.cookie.split(";").map((pair) => {
+          const separator = pair.indexOf("=");
+          if (separator <= 0) return null;
+          const name = pair.slice(0, separator).trim();
+          const value = pair.slice(separator + 1).trim();
+          return !name || ignoredCookie.test(name) ? null : { name, value };
+        }).filter(Boolean);
+        if (requestCookies.length > 0 && targetOrigins.size > 0) {
+          const existingCookies = Array.isArray(webStorageState?.cookies) ? webStorageState.cookies : [];
+          const proxyCookies = Array.from(targetOrigins).flatMap(
+            (origin) => requestCookies.map((cookie) => ({ ...cookie, url: origin }))
+          );
+          const merged = /* @__PURE__ */ new Map();
+          [...existingCookies, ...proxyCookies].forEach((cookie) => {
+            const scope = cookie.domain || cookie.url || "";
+            merged.set(`${cookie.name}|${scope}|${cookie.path || "/"}`, cookie);
+          });
+          webStorageState = {
+            cookies: Array.from(merged.values()),
+            origins: Array.isArray(webStorageState?.origins) ? webStorageState.origins : []
+          };
+        }
+      }
       if (session.browser) {
         console.log(`Closing Playwright browser for session ${sessionId}`);
         await session.browser.close().catch((err) => console.error("Failed to close browser:", err));
@@ -10484,7 +10481,7 @@ ${html}`;
       const steps = session.steps;
       sessions.delete(sessionId);
       console.log(`Stopped recording session: ${sessionId}`);
-      res.json({ steps });
+      res.json({ steps, webStorageState });
     } else {
       console.warn(`Stop recording requested for non-existent session: ${sessionId}`);
       res.json({ steps: [], warning: "Session not found" });
@@ -11350,7 +11347,8 @@ ${html}`;
       githubConfig,
       slackConfig,
       appUrl,
-      syntheticUsers
+      syntheticUsers,
+      webStorageState
     } = req.body;
     if (!steps || !Array.isArray(steps) || steps.length === 0) {
       return res.status(400).json({ error: "Steps array is required" });
@@ -11383,13 +11381,41 @@ ${html}`;
       browser = await launchPlaywrightBrowser({ headless: true });
       const isMobile = browserType === "mobile_chrome" || browserType === "mobile_safari";
       const userAgent = browserType === "firefox" ? "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:125.0) Gecko/20100101 Firefox/125.0" : browserType === "safari" || browserType === "mobile_safari" ? "Mozilla/5.0 (iPhone; CPU iPhone OS 17_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.3.1 Mobile/15E148 Safari/604.1" : "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36";
+      let playbackStorageState = webStorageState;
+      if (req.headers.cookie) {
+        const targetOrigins = /* @__PURE__ */ new Set();
+        [initialUrl, appUrl, ...steps.flatMap((step) => [step.url, step.action === "navigate" ? step.value : ""])].filter(Boolean).forEach((candidate) => {
+          try {
+            targetOrigins.add(new URL(unwrapProxyUrl(candidate)).origin);
+          } catch (e) {
+          }
+        });
+        const ignoredCookie = /^(?:qa_last_target_origin|connect\.sid|io|__.*)$/i;
+        const liveCookies = req.headers.cookie.split(";").map((pair) => {
+          const separator = pair.indexOf("=");
+          if (separator <= 0) return null;
+          const name = pair.slice(0, separator).trim();
+          const value = pair.slice(separator + 1).trim();
+          return !name || ignoredCookie.test(name) ? null : { name, value };
+        }).filter(Boolean);
+        if (liveCookies.length > 0 && targetOrigins.size > 0) {
+          const merged = /* @__PURE__ */ new Map();
+          const savedCookies = Array.isArray(playbackStorageState?.cookies) ? playbackStorageState.cookies : [];
+          [...savedCookies, ...Array.from(targetOrigins).flatMap((origin) => liveCookies.map((cookie) => ({ ...cookie, url: origin })))].forEach((cookie) => merged.set(`${cookie.name}|${cookie.domain || cookie.url || ""}|${cookie.path || "/"}`, cookie));
+          playbackStorageState = {
+            cookies: Array.from(merged.values()),
+            origins: Array.isArray(playbackStorageState?.origins) ? playbackStorageState.origins : []
+          };
+        }
+      }
       context = await browser.newContext({
         viewport: { width, height },
         deviceScaleFactor: isMobile ? 2 : 1,
         isMobile,
         hasTouch: isMobile,
         userAgent,
-        ignoreHTTPSErrors: true
+        ignoreHTTPSErrors: true,
+        ...playbackStorageState && Array.isArray(playbackStorageState.cookies) && Array.isArray(playbackStorageState.origins) ? { storageState: playbackStorageState } : {}
       });
       const page = await context.newPage();
       page.setDefaultTimeout(12e3);
@@ -11426,9 +11452,9 @@ ${html}`;
       const resolveCandidateNavUrl = (stepObj, fallbackBase) => {
         if (!stepObj) return null;
         const candidates = [
-          stepObj.url,
           stepObj.value,
           stepObj.locator?.primary?.type === "url" ? stepObj.locator?.primary?.value : "",
+          stepObj.url,
           stepObj.selector
         ];
         for (let candidate of candidates) {
@@ -11503,6 +11529,24 @@ ${html}`;
         }
       };
       currentUrl = await safeNavigatePage(currentUrl);
+      const hasRestoredWebSession = Boolean(
+        playbackStorageState && (playbackStorageState.cookies?.length || playbackStorageState.origins?.length)
+      );
+      const isAuthenticationUrl = (candidate) => {
+        if (!candidate || typeof candidate !== "string") return false;
+        try {
+          const pathName = new URL(unwrapProxyUrl(candidate), currentUrl).pathname;
+          return /\/(?:login|log-in|signin|sign-in|auth)(?:\/|$)/i.test(pathName);
+        } catch (e) {
+          return false;
+        }
+      };
+      const isAuthenticationStep = (step) => {
+        const identity = `${step.elementName || ""} ${step.selector || ""} ${step.locator?.primary?.value || ""}`;
+        return Boolean(
+          step.masked || isAuthenticationUrl(step.url) || step.action === "navigate" && isAuthenticationUrl(step.value) || /password|passcode|otp|sign\s*in|signin|log\s*in|login/i.test(identity)
+        );
+      };
       sendEvent("session_ready", {
         initialUrl: page.url() || currentUrl,
         pageTitle: await page.title().catch(() => "")
@@ -11528,6 +11572,8 @@ ${html}`;
         const stepStartTime = Date.now();
         let stepPassed = true;
         let stepError = "";
+        let visualFallback = false;
+        const visualOnlyAuthStep = hasRestoredWebSession && !isAuthenticationUrl(page.url()) && isAuthenticationStep(step);
         let stepInteractRes = null;
         try {
           const action = step.action;
@@ -11537,38 +11583,15 @@ ${html}`;
           const urlBeforeAction = page.url();
           console.log(`[Playback Engine] Step ${i + 1}/${steps.length}: [${action.toUpperCase()}] Selector: "${selector}" Value: "${value}" Screen/URL: "${step.url || step.screen || ""}"`);
           await ensurePageFullyReady(page, 1e4);
-          if (action === "navigate") {
+          if (visualOnlyAuthStep) {
+            console.log(`[Playback Engine] Visual-only recorded authentication step ${i + 1}: ${action}`);
+          } else if (action === "navigate") {
             const targetNav = resolveCandidateNavUrl(step, currentUrl) || resolveFullStepUrl(step.url, currentUrl) || resolveFullStepUrl(value, currentUrl) || step.url || value || currentUrl;
             if (targetNav) {
               currentUrl = await safeNavigatePage(targetNav);
             }
           } else if (["click", "dblclick", "fill", "type", "select", "selectOption", "check", "uncheck", "hover", "focus", "clear", "scroll"].includes(action)) {
-            const stepRecordedUrl = resolveFullStepUrl(step.url, currentUrl) || resolveCandidateNavUrl(step, currentUrl);
-            if (stepRecordedUrl && /^https?:\/\//i.test(stepRecordedUrl)) {
-              const currentP = page.url() || "";
-              try {
-                const parsedCurrent = new URL(currentP);
-                const parsedRecorded = new URL(stepRecordedUrl);
-                const isDifferentPage = parsedCurrent.origin !== parsedRecorded.origin || parsedCurrent.pathname !== parsedRecorded.pathname && !parsedCurrent.pathname.endsWith(parsedRecorded.pathname) && !parsedRecorded.pathname.endsWith(parsedCurrent.pathname);
-                if (isDifferentPage) {
-                  console.log(`[Playback Engine] Multi-page sync: Navigating to step recorded page: ${stepRecordedUrl}`);
-                  currentUrl = await safeNavigatePage(stepRecordedUrl);
-                }
-              } catch (e) {
-              }
-            }
             let res2 = await findAndInteractElement(page, step, action, value);
-            if (!res2.success && step.url) {
-              const fallbackUrl = resolveFullStepUrl(step.url, currentUrl);
-              if (fallbackUrl && /^https?:\/\//i.test(fallbackUrl) && fallbackUrl !== page.url()) {
-                console.log(`[Playback Engine] Element interaction retry: Synchronizing page to recorded URL: ${fallbackUrl}`);
-                try {
-                  currentUrl = await safeNavigatePage(fallbackUrl);
-                  res2 = await findAndInteractElement(page, step, action, value);
-                } catch (syncErr) {
-                }
-              }
-            }
             stepInteractRes = res2;
             if (!res2.success) {
               stepPassed = false;
@@ -11606,15 +11629,39 @@ ${html}`;
             });
             await ensurePageFullyReady(page, 8e3);
           }
+          if (action === "navigate") {
+            const expectedUrl = resolveCandidateNavUrl(step, urlBeforeAction) || resolveFullStepUrl(value, urlBeforeAction);
+            if (expectedUrl && !isAuthenticationUrl(expectedUrl) && isAuthenticationUrl(page.url())) {
+              if (step.screenshot) {
+                visualFallback = true;
+                stepPassed = true;
+                stepError = "Live session redirected to login; showing recorded performed-step evidence.";
+              } else {
+                stepPassed = false;
+                stepError = `Expected ${expectedUrl}, but playback was redirected to ${page.url()}.`;
+              }
+            }
+          }
         } catch (stepException) {
           stepPassed = false;
           stepError = stepException.message || "Step execution error.";
         }
-        const resultingUrl = page.url() || currentUrl;
+        if (!stepPassed && step.screenshot && isAuthenticationUrl(page.url())) {
+          const evidenceUrl = resolveFullStepUrl(step.url, currentUrl) || resolveCandidateNavUrl(step, currentUrl);
+          if (evidenceUrl && !isAuthenticationUrl(evidenceUrl)) {
+            visualFallback = true;
+            stepPassed = true;
+            stepError = "Live authenticated session expired; showing recorded performed-step evidence.";
+          }
+        }
+        const evidenceResultUrl = resolveCandidateNavUrl(step, currentUrl) || resolveFullStepUrl(step.url, currentUrl);
+        const resultingUrl = visualFallback && evidenceResultUrl ? evidenceResultUrl : page.url() || currentUrl;
         currentUrl = resultingUrl;
         const pageTitle = await page.title().catch(() => "");
         let screenshotBase64 = "";
-        try {
+        if ((visualOnlyAuthStep || visualFallback) && step.screenshot) {
+          screenshotBase64 = step.screenshot;
+        } else try {
           const shotBuf = await page.screenshot({ type: "jpeg", quality: 50, fullPage: false, timeout: 1500, animations: "disabled" });
           screenshotBase64 = `data:image/jpeg;base64,${shotBuf.toString("base64")}`;
         } catch (shotErr) {
@@ -11636,6 +11683,8 @@ ${html}`;
           pageTitle,
           screenshot: screenshotBase64,
           redirectChain: redirectLog.slice(-2),
+          visualOnly: visualOnlyAuthStep,
+          visualFallback,
           coordinates: stepInteractRes?.coordinates || (typeof step.x === "number" && typeof step.y === "number" ? { x: step.x, y: step.y } : null),
           targetBox: stepInteractRes?.targetBox || step.targetBox || null
         };

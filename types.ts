@@ -447,7 +447,7 @@ export interface FrameInfo {
 }
 
 export interface StepLocator {
-  type: 'id' | 'name' | 'role' | 'text' | 'css' | 'xpath' | 'accessibility-id' | 'resource-id' | 'content-desc' | 'data-testid' | 'placeholder' | 'url' | 'shadow-pierce';
+  type: 'id' | 'name' | 'role' | 'text' | 'css' | 'xpath' | 'accessibility-id' | 'resource-id' | 'content-desc' | 'data-testid' | 'placeholder' | 'url' | 'shadow-pierce' | 'coordinates' | 'bounds';
   value: string;
   playwright?: string;
 }
@@ -510,6 +510,11 @@ export interface RecordedFlow {
   mobilePackageName?: string;
   mobileAppName?: string;
   stepScreenshots?: Record<string, string>;
+  /** Web-only Playwright state captured when recording stops. */
+  webStorageState?: {
+    cookies: Array<Record<string, any>>;
+    origins: Array<Record<string, any>>;
+  };
 }
 
 export interface Project {
