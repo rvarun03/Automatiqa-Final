@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { 
   Play, 
   Square, 
@@ -74,7 +74,7 @@ import { motion, AnimatePresence, Reorder } from 'motion/react';
 import { io } from 'socket.io-client';
 import JSZip from 'jszip';
 import { saveAs } from 'file-saver';
-import { enhanceRecordedScript } from '../geminiService';
+import { enhanceRecordedScript, isDuplicateOfRecordedStep, pickRicherRecordedStep, deduplicateRecordedSteps } from '../geminiService';
 import { 
   Project, 
   User, 
@@ -381,6 +381,11 @@ const RecordAndPlay: React.FC<RecordAndPlayProps> = ({ project, user, onUpdatePr
   const [showLiveRecorder, setShowLiveRecorder] = useState(false);
   const [showScriptPreview, setShowScriptPreview] = useState(false);
   const [recordingMode, setRecordingMode] = useState<'manual' | 'extension' | 'codegen'>('codegen');
+  // Video of the session Playwright recorded, and whether playback should show
+  // it rather than re-executing the steps against the live site.
+  const [recordedVideoUrl, setRecordedVideoUrl] = useState<string | null>(null);
+  const [playbackUsesVideo, setPlaybackUsesVideo] = useState(true);
+  const [activeVideoUrl, setActiveVideoUrl] = useState<string | null>(null);
   const [activePanel, setActivePanel] = useState<'steps' | 'script' | 'console'>('steps');
   const [mobileDisplayMode, setMobileDisplayMode] = useState<'real_emulator' | 'mirror'>('real_emulator');
   const [consoleLogs, setConsoleLogs] = useState<{type: string, message: string, timestamp: number, url: string}[]>([]);
@@ -791,6 +796,10 @@ const RecordAndPlay: React.FC<RecordAndPlayProps> = ({ project, user, onUpdatePr
     setIsPlaybackModalOpen(true);
     setPlaybackStatus('running');
     setPlaybackActiveUrl(initialUrl);
+    // Each run decides afresh whether it shows a video, so a previous flow's
+    // recording is never left on screen.
+    setActiveVideoUrl(null);
+    setPlaybackUsesVideo(true);
 
     // Preload Step 0 Metadata & Alignment instantly
     const firstStep = activeFlow.steps[0];
@@ -883,6 +892,34 @@ const RecordAndPlay: React.FC<RecordAndPlayProps> = ({ project, user, onUpdatePr
     playbackCancelRef.current = false;
     playbackPauseRef.current = false;
     setPlaybackStatus('running');
+
+    // Video playback: show what the recording actually did, instead of driving a
+    // fresh browser through the steps again. Nothing is executed against the
+    // site, so nothing can fail on a changed locator - and equally, nothing is
+    // verified. The automation engine stays available via the toggle.
+    const flowVideo = targetFlow.videoUrl || recordedVideoUrl;
+    if (playbackUsesVideo && flowVideo) {
+      setActiveVideoUrl(flowVideo);
+      setPlaybackStatus('completed');
+      setCurrentPlaybackStepIndex(targetFlow.steps.length);
+      setPlaybackLogs(prev => [...prev, {
+        timestamp: new Date().toLocaleTimeString(),
+        level: 'info',
+        message: `🎬 Playing the recorded session video (${targetFlow.steps.length} recorded steps). No actions are being executed against the site.`
+      }]);
+      // Watching a video is not an active engine run. Release the guard so the
+      // user can switch to "Run Automation Instead" and press Play.
+      playbackRunningRef.current = false;
+      return;
+    }
+
+    if (playbackUsesVideo && !flowVideo) {
+      setPlaybackLogs(prev => [...prev, {
+        timestamp: new Date().toLocaleTimeString(),
+        level: 'warn',
+        message: '⚠️ This flow has no session video (it was recorded before video capture, or not in Codegen mode). Running the automation engine instead.'
+      }]);
+    }
 
     const steps = targetFlow.steps;
     const chosenBrowserObj = PLAYBACK_BROWSER_OPTIONS.find(b => b.id === playbackSelectedBrowser) || PLAYBACK_BROWSER_OPTIONS[0];
@@ -1023,6 +1060,7 @@ const RecordAndPlay: React.FC<RecordAndPlayProps> = ({ project, user, onUpdatePr
     }, 1000);
 
     let hasFailed = false;
+    const failedStepNumbers: number[] = [];
 
     // Queue data structures for background SSE stream reader and foreground step runner
     const stepQueue: any[] = [];
@@ -1279,10 +1317,14 @@ const RecordAndPlay: React.FC<RecordAndPlayProps> = ({ project, user, onUpdatePr
         }]);
 
         if (resItem.status === 'failed') {
+          // The engine decides whether a failure ends the run: it continues when
+          // the browser is still on the page the next step expects, so one run
+          // reports every broken step instead of only the first. Keep consuming
+          // results until the stream ends rather than stopping here.
           hasFailed = true;
+          failedStepNumbers.push(resItem.stepIndex + 1);
           setPlaybackStatus('failed');
-          toast.error(`Playback failed at step ${resItem.stepIndex + 1}: ${resItem.error || 'Step execution failed'}`);
-          break;
+          toast.error(`Step ${resItem.stepIndex + 1} failed: ${resItem.error || 'Step execution failed'}`);
         }
 
         if (stepByStepModeRef.current && processedCount < steps.length) {
@@ -1337,13 +1379,15 @@ const RecordAndPlay: React.FC<RecordAndPlayProps> = ({ project, user, onUpdatePr
       }
       if (!playbackCancelRef.current) {
         setPlaybackStatus('failed');
+        const summary = failedStepNumbers.length > 0
+          ? `Playback finished with ${failedStepNumbers.length} failed step${failedStepNumbers.length === 1 ? '' : 's'} (step ${failedStepNumbers.join(', ')}) out of ${processedCount} executed.`
+          : 'Playback engine ended without verified step results; no simulated fallback was run.';
         setPlaybackLogs(prev => [...prev, {
           timestamp: new Date().toLocaleTimeString(),
           level: 'error',
-          message: 'Playback engine ended without verified step results; no simulated fallback was run.'
+          message: summary
         }]);
         toast.error('Playback ended without verified step results.');
-        playbackRunningRef.current = false;
         return;
       }
     } catch (err: any) {
@@ -1552,6 +1596,9 @@ const RecordAndPlay: React.FC<RecordAndPlayProps> = ({ project, user, onUpdatePr
     extraMetrics?: {
       targetBox?: { x: number; y: number; width: number; height: number };
       coordinates?: { x: number; y: number };
+      // Set when re-recording an existing step with its resolved UI node, so the
+      // gesture is not dispatched to the device again
+      recordOnly?: boolean;
     }
   ) => {
     if (!elem) return;
@@ -1666,6 +1713,7 @@ const RecordAndPlay: React.FC<RecordAndPlayProps> = ({ project, user, onUpdatePr
       screen: (mobileActiveAppTab || mobileAppScreen || 'MAIN').toUpperCase(),
       platform: 'mobile',
       bounds: elem.bounds,
+      resolvedFromHierarchy: !!extraMetrics?.recordOnly || undefined,
       targetBox: extraMetrics?.targetBox,
       coordinates: extraMetrics?.coordinates,
       x: extraMetrics?.coordinates?.x,
@@ -1684,10 +1732,12 @@ const RecordAndPlay: React.FC<RecordAndPlayProps> = ({ project, user, onUpdatePr
     
     // Also dispatch the physical action to the agent. The agent executes ADB
     // taps by coordinates, so never queue a locator-only tap with undefined x/y.
+    // A re-record that only upgrades an already-captured step to its real UI
+    // node must not gesture on the device a second time.
     const boundsMatch = elem.bounds?.match(/^\[(\d+),(\d+)\]\[(\d+),(\d+)\]$/);
     const tapX = boundsMatch ? Math.round((Number(boundsMatch[1]) + Number(boundsMatch[3])) / 2) : undefined;
     const tapY = boundsMatch ? Math.round((Number(boundsMatch[2]) + Number(boundsMatch[4])) / 2) : undefined;
-    if (liveMobileFrame && tapX !== undefined && tapY !== undefined) {
+    if (!extraMetrics?.recordOnly && liveMobileFrame && tapX !== undefined && tapY !== undefined) {
       performLiveDeviceAction('tap', {
         x: tapX,
         y: tapY,
@@ -1728,18 +1778,36 @@ const RecordAndPlay: React.FC<RecordAndPlayProps> = ({ project, user, onUpdatePr
               if (stepsData.success && Array.isArray(stepsData.steps) && stepsData.steps.length > 0) {
                 setCurrentSteps(prev => {
                   const existingIds = new Set(prev.map(s => s.id));
-                  const newSteps = stepsData.steps
+                  const incoming = stepsData.steps
                     .filter((s: any) => !existingIds.has(s.id))
                     .map((step: any) => (
                       step.screenshot || !recordedMobileFrameRef.current
                         ? step
                         : { ...step, screenshot: recordedMobileFrameRef.current }
                     ));
-                  if (newSteps.length > 0) {
-                    console.log(`[Mobile Sync] Polled and merged ${newSteps.length} physical emulator steps.`);
-                    return [...prev, ...newSteps];
+                  if (incoming.length === 0) return prev;
+
+                  // Steps polled from the device agent bypass addRecordedStep, so
+                  // apply the same repeat handling here. Without it a gesture the
+                  // inspector already captured is appended a second time, and the
+                  // agent's own retries pile up as identical steps.
+                  const merged = [...prev];
+                  let changed = false;
+                  for (const step of incoming) {
+                    const last = merged[merged.length - 1];
+                    if (isDuplicateOfRecordedStep(last, step)) {
+                      merged[merged.length - 1] = pickRicherRecordedStep(last, step) as RecordedStep;
+                      changed = true;
+                      continue;
+                    }
+                    merged.push(step);
+                    changed = true;
                   }
-                  return prev;
+
+                  if (changed) {
+                    console.log(`[Mobile Sync] Polled ${incoming.length} agent steps, kept ${merged.length - prev.length} new.`);
+                  }
+                  return changed ? merged : prev;
                 });
               }
             }
@@ -2365,25 +2433,28 @@ const RecordAndPlay: React.FC<RecordAndPlayProps> = ({ project, user, onUpdatePr
     setCurrentSteps(prev => {
       const lastStep = prev[prev.length - 1];
 
-      // Live taps are added immediately with a coordinate label. The desktop
+      // Gestures are added immediately with a coordinate label. The desktop
       // agent resolves the real Android node concurrently and sends it shortly
       // afterwards; replace the placeholder while preserving its position/id.
-      const isCoordinatePlaceholder = lastStep?.platform === 'mobile' &&
-        lastStep.action === 'click' &&
-        (/^(Tap|Element) at \(\d+,\s*\d+\)$/i.test(lastStep.elementName || '') ||
-         lastStep.elementName === 'Resolving Android element…' ||
-         lastStep.elementName === 'Screen position');
-      const hasResolvedMobileName = eventData.platform === 'mobile' &&
-        eventData.action === 'click' &&
+      const placeholderName = (name?: string) =>
+        /^(?:Tap|Element|Coordinates) at \(\d+,\s*\d+\)$/i.test(name || '') ||
+        name === 'Resolving Android element…' ||
+        name === 'Screen position';
+      const lastIsPlaceholder = lastStep?.platform === 'mobile' && placeholderName(lastStep.elementName);
+      const hasResolvedMobileNode = eventData.platform === 'mobile' &&
         eventData.elementName &&
-        !/^(?:Tap at|Element at|Coordinates) \(/i.test(eventData.elementName);
-      if (isCoordinatePlaceholder && hasResolvedMobileName &&
+        !placeholderName(eventData.elementName) &&
+        (lastStep?.action === eventData.action ||
+          (lastStep?.action === 'click' && eventData.action === 'tap'));
+      if (lastIsPlaceholder && hasResolvedMobileNode &&
           Date.now() - (lastStep.timestamp || 0) < 10000) {
         return [...prev.slice(0, -1), {
           ...lastStep,
           elementName: eventData.elementName,
           locator: eventData.locator || lastStep.locator,
           value: eventData.value ?? lastStep.value,
+          bounds: eventData.bounds || lastStep.bounds,
+          resolvedFromHierarchy: true,
           screen: eventData.screen || lastStep.screen
         }];
       }
@@ -2412,14 +2483,23 @@ const RecordAndPlay: React.FC<RecordAndPlayProps> = ({ project, user, onUpdatePr
         }
       }
 
-      // Avoid duplicate clicks on the exact same element within 300ms
-      if (lastStep && lastStep.action === 'click' && eventData.action === 'click') {
-        const currentSelector = eventData.locator?.primary?.value || eventData.selector;
-        const lastSelector = lastStep.locator?.primary?.value;
-        
-        if (lastSelector && currentSelector && lastSelector === currentSelector && Date.now() - (lastStep.timestamp || 0) < 300) {
-          return prev;
-        }
+      // Every mobile gesture is reported twice - once by the inspector UI and
+      // again by the device agent. Drop the repeat for taps, swipes, long
+      // presses and key presses alike, keeping whichever copy resolved the
+      // better locator. Deliberate repeats fall outside the capture window and
+      // are still recorded.
+      const incomingForDedup = {
+        ...eventData,
+        locator: eventData.locator || (eventData.selector
+          ? { primary: { type: 'css', value: eventData.selector }, alternatives: [] }
+          : undefined),
+        timestamp: eventData.timestamp || Date.now()
+      };
+      if (isDuplicateOfRecordedStep(lastStep, incomingForDedup)) {
+        // Always write the kept step back: it carries the sliding duplicate
+        // window, without which a long burst of repeats starts recording again
+        // part-way through.
+        return [...prev.slice(0, -1), pickRicherRecordedStep(lastStep, incomingForDedup) as RecordedStep];
       }
 
       // Generate Playwright code if missing
@@ -2475,9 +2555,12 @@ const RecordAndPlay: React.FC<RecordAndPlayProps> = ({ project, user, onUpdatePr
         x: eventData.x,
         y: eventData.y,
         scrollX: eventData.scrollX,
-        scrollY: eventData.scrollY
+        scrollY: eventData.scrollY,
+        bounds: eventData.bounds,
+        className: eventData.className,
+        resolvedFromHierarchy: eventData.resolvedFromHierarchy
       };
-      
+
       console.log("New step added to state:", step.action, "Screen:", step.screen);
       return [...prev, step];
     });
@@ -3277,6 +3360,15 @@ const RecordAndPlay: React.FC<RecordAndPlayProps> = ({ project, user, onUpdatePr
           setRecordedWebStorageState(data.webStorageState);
         }
 
+        // Playwright flushes the session video while the context is closing, so
+        // the stop response is the first point at which the URL is available.
+        if (data?.videoUrl) {
+          setRecordedVideoUrl(data.videoUrl);
+          toast.success('Session video captured - playback can replay it.');
+        } else {
+          setRecordedVideoUrl(null);
+        }
+
         if (socketRef.current) {
           socketRef.current.disconnect();
         }
@@ -3585,7 +3677,12 @@ const RecordAndPlay: React.FC<RecordAndPlayProps> = ({ project, user, onUpdatePr
           setFlowName(response.suggestedTitle);
         }
         setActivePanel('steps');
-        toast.success('Script enhanced with AI successfully! All recorded steps preserved.');
+        const removed = currentPlatformSteps.length - updated.length;
+        toast.success(
+          removed > 0
+            ? `Optimized ${currentPlatformSteps.length} steps into ${updated.length} - removed ${removed} repeated step${removed === 1 ? '' : 's'}.`
+            : 'Script enhanced with AI successfully! No repeated steps found.'
+        );
       } else {
         toast.error('AI optimization returned invalid response. Please try again.');
       }
@@ -3805,7 +3902,10 @@ const RecordAndPlay: React.FC<RecordAndPlayProps> = ({ project, user, onUpdatePr
       platform: platform,
       ...(platform === 'web' && recordedWebStorageState
         ? { webStorageState: recordedWebStorageState }
-        : {})
+        : {}),
+      // Keep an existing recording when editing metadata without recording a
+      // replacement session.
+      videoUrl: recordedVideoUrl || flows.find(f => f.id === activeFlowId)?.videoUrl
     };
 
     const currentFlowList = (project.recordedFlows && project.recordedFlows.length > 0) ? project.recordedFlows : flows;
@@ -4147,10 +4247,37 @@ const RecordAndPlay: React.FC<RecordAndPlayProps> = ({ project, user, onUpdatePr
         (step.value || "").toLowerCase().includes(query);
     });
 
+  // Android framework containers wrap every screen, so a script that targets one
+  // taps the root view instead of the control that was recorded.
+  const NON_TARGETABLE_ANDROID_IDS = new Set([
+    'android:id/content',
+    'android:id/decor_content_parent',
+    'android:id/action_bar_root',
+    'android:id/navigationBarBackground',
+    'android:id/statusBarBackground'
+  ]);
+
+  const isUsableMobileLocator = (locVal: string) =>
+    !!locVal &&
+    !NON_TARGETABLE_ANDROID_IDS.has(locVal) &&
+    !locVal.startsWith('android:id/') &&
+    locVal !== '//android.view.View';
+
   const formatStepToScript = (step: RecordedStep, targetPlatform: string = 'web') => {
     const isMobile = targetPlatform === 'mobile' || step.platform === 'mobile';
     const primary = step.locator?.primary;
     const pw = primary?.playwright?.trim();
+
+    // A step that never resolved to a real node must not be emitted as if it
+    // had: silently targeting the root container is worse than saying so.
+    if (isMobile && step.action !== 'navigate' && step.action !== 'wait' && step.action !== 'press' &&
+        !isUsableMobileLocator(primary?.value || '')) {
+      const where = step.coordinates || (typeof step.x === 'number' ? { x: step.x, y: step.y } : null);
+      return `  // TODO: "${step.elementName || step.action}" was recorded at screen coordinates only -\n` +
+        `  // no element was found in the app's UI hierarchy. Re-record this step.\n` +
+        (where ? `  await driver.touchPerform([{ action: 'tap', options: { x: ${where.x}, y: ${where.y} } }]);` :
+          `  // (no coordinates captured for this step)`);
+    }
 
     const isBadMobileNode = isMobile && (
       (/@bounds\s*=/.test(`${primary?.value || ''} ${pw || ''}`) &&
@@ -4203,6 +4330,24 @@ const RecordAndPlay: React.FC<RecordAndPlayProps> = ({ project, user, onUpdatePr
     if (isMobile) {
       const locType = primary?.type || 'resource-id';
       const locVal = primary?.value || '';
+      const elExpr = locType === 'resource-id'
+        ? `driver.elementById("${locVal}")`
+        : locType === 'accessibility-id'
+          ? `driver.elementByAccessibilityId("${locVal}")`
+          : `driver.elementByXPath("${locVal}")`;
+      if (step.action === 'press') {
+        const key = step.value || 'Back';
+        return `  // Press ${key}\n  await driver.pressKeyCode(${key === 'Home' ? 3 : key === 'AppSwitch' || key === 'Recents' ? 187 : key === 'Enter' ? 66 : 4});`;
+      }
+      if (step.action === 'wait') {
+        return `  await driver.pause(${Number(step.value) || 1000});`;
+      }
+      if ((step.action as string) === 'swipe' || step.action === 'scroll') {
+        return `  // Swipe on ${step.elementName || locVal}\n  await driver.touchPerform([\n    { action: 'press', options: { x: ${step.x ?? 540}, y: ${step.y ?? 1200} } },\n    { action: 'wait', options: { ms: 300 } },\n    { action: 'moveTo', options: { x: ${step.deltaX ?? step.x ?? 540}, y: ${step.deltaY ?? 400} } },\n    { action: 'release' }\n  ]);`;
+      }
+      if ((step.action as string) === 'long_press') {
+        return `  // Long press ${step.elementName || locVal}\n  const el = await ${elExpr};\n  await driver.touchPerform([{ action: 'longPress', options: { element: el.value } }, { action: 'release' }]);`;
+      }
       if (step.action === 'click') {
         if (locType === 'coordinates') {
           const fallback = coordinateScript();
@@ -4275,19 +4420,24 @@ const RecordAndPlay: React.FC<RecordAndPlayProps> = ({ project, user, onUpdatePr
     return `  // Action: ${step.action} on ${primary?.value || ''}`;
   };
 
-  const generatedPlaywrightScript = platform === 'mobile' 
+  // Generate from de-duplicated steps. Recordings can carry the same gesture more
+  // than once (the inspector and the device agent both report it), and emitting
+  // every copy produces a script that repeats each action.
+  const scriptSteps = useMemo(() => deduplicateRecordedSteps(currentSteps) as RecordedStep[], [currentSteps]);
+
+  const generatedPlaywrightScript = platform === 'mobile'
     ? `import { remote } from 'webdriverio';
 import { expect } from 'expect';
 
 describe('${flowName}', () => {
   it('should execute recorded mobile scenario', async () => {
-${currentSteps.map(step => formatStepToScript(step, 'mobile')).join('\n')}
+${scriptSteps.map(step => formatStepToScript(step, 'mobile')).join('\n')}
   });
 });`
     : `import { test, expect } from '@playwright/test';
 
 test('${flowName}', async ({ page }) => {
-${currentSteps.map(step => formatStepToScript(step, 'web')).join('\n')}
+${scriptSteps.map(step => formatStepToScript(step, 'web')).join('\n')}
 });`;
 
   const renderStartModalContent = () => {
@@ -7766,7 +7916,57 @@ ${currentSteps.map(step => formatStepToScript(step, 'web')).join('\n')}
                 
                 {/* Visual View (Iframe or Simulator Frame) */}
                 <div className="flex-1 bg-slate-950 p-6 flex flex-col justify-between overflow-y-auto custom-scrollbar border-r border-slate-800">
-                  {playbackFlow?.platform === 'web' ? (
+                  {activeVideoUrl ? (
+                    /* Session video: what the recording actually did. Nothing is
+                       executed against the site while this plays. */
+                    <div className="w-full h-full bg-slate-900 rounded-2xl border border-slate-800 overflow-hidden flex flex-col relative min-h-[350px]">
+                      <div className="px-4 py-2 bg-slate-950 border-b border-slate-800 flex items-center justify-between">
+                        <div className="flex items-center gap-2 min-w-0">
+                          <Video size={14} className="text-emerald-400 shrink-0" />
+                          <span className="text-[11px] font-black text-emerald-300 uppercase tracking-widest">
+                            Recorded Session Video
+                          </span>
+                          <span className="text-[10px] text-slate-500 truncate">
+                            {playbackFlow?.steps?.length || 0} steps captured
+                          </span>
+                        </div>
+                        <button
+                          onClick={() => {
+                            setActiveVideoUrl(null);
+                            setPlaybackUsesVideo(false);
+                            setPlaybackLogs(prev => [...prev, {
+                              timestamp: new Date().toLocaleTimeString(),
+                              level: 'info',
+                              message: '⚙️ Switched to the automation engine. Press Play to execute the steps against the live site.'
+                            }]);
+                          }}
+                          className="px-2 py-0.5 rounded border border-slate-700 bg-slate-800 text-slate-300 text-[9px] font-black uppercase tracking-wider hover:bg-slate-700 transition-all flex items-center gap-1.5 shrink-0"
+                          title="Run the recorded steps against the live site instead of watching the video"
+                        >
+                          <Play size={10} /> Run Automation Instead
+                        </button>
+                      </div>
+                      <div className="flex-1 bg-black flex items-center justify-center">
+                        <video
+                          key={activeVideoUrl}
+                          src={activeVideoUrl}
+                          controls
+                          autoPlay
+                          className="w-full h-full object-contain"
+                          onError={() => {
+                            setPlaybackLogs(prev => [...prev, {
+                              timestamp: new Date().toLocaleTimeString(),
+                              level: 'error',
+                              message: 'Could not load the session video file. It may have been cleared from the server.'
+                            }]);
+                          }}
+                        />
+                      </div>
+                      <div className="px-4 py-2 bg-slate-950 border-t border-slate-800 text-[10px] text-slate-500">
+                        This is a replay of the recorded session. No actions are being performed on the site, so nothing is verified.
+                      </div>
+                    </div>
+                  ) : playbackFlow?.platform === 'web' ? (
                     <div className="w-full h-full bg-slate-900 rounded-2xl border border-slate-800 overflow-hidden flex flex-col relative min-h-[350px]">
                       {/* Browser Address Bar */}
                       <div className="px-4 py-2 bg-slate-950 border-b border-slate-800 flex items-center justify-between">

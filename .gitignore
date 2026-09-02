@@ -26,3 +26,6 @@ backup-key.json
 *.njsproj
 *.sln
 *.sw?
+
+# Playwright session videos from Record and Play
+recordings/

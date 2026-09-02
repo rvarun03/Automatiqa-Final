@@ -114,6 +114,7 @@ export interface TestCase {
   testDataSets?: string[]; // Added to support multiple structured sets
   attachments?: string[]; // Multiple base64 strings/URLs (Images/Videos)
   links?: string[]; // Multiple reference URLs
+  source?: string;
 }
 
 export interface TestScenario {
@@ -144,6 +145,9 @@ export interface TestScenario {
   attachments?: string[];
   docContent?: string;
   docFileName?: string;
+  videoFileName?: string;
+  videoFrames?: any[];
+  videoDuration?: number;
 }
 
 export interface AutomationScriptFile {
@@ -158,6 +162,7 @@ export interface AutomationScript {
   tool: AutomationTool;
   language: ProgrammingLanguage;
   testCaseTitles?: string[];
+  testCases?: TestCase[];
   createdAt: string;
   lastExecutionStatus?: 'SUCCESS' | 'FAILURE' | 'RUNNING' | TestStatus;
   lastExecutedAt?: string;
@@ -170,11 +175,17 @@ export interface AutomationScript {
   title?: string;
   description?: string;
   folderId?: string;
+  folderName?: string;
   scenarioId?: string;
+  scenarioTitle?: string;
   lastExecutionNotes?: string;
   contextImages?: string[];
-  source?: 'record_play' | 'script_generator';
+  videoFileName?: string;
+  videoDuration?: number;
+  videoFrames?: any[];
+  source?: 'record_play' | 'script_generator' | 'mobile_app';
   platform?: 'web' | 'mobile';
+  isImported?: boolean;
 }
 
 export interface PerformanceScript {
@@ -447,7 +458,7 @@ export interface FrameInfo {
 }
 
 export interface StepLocator {
-  type: 'id' | 'name' | 'role' | 'text' | 'css' | 'xpath' | 'accessibility-id' | 'resource-id' | 'content-desc' | 'data-testid' | 'placeholder' | 'url' | 'shadow-pierce' | 'coordinates' | 'bounds';
+  type: 'id' | 'name' | 'role' | 'text' | 'css' | 'xpath' | 'accessibility-id' | 'resource-id' | 'content-desc' | 'data-testid' | 'placeholder' | 'url' | 'shadow-pierce';
   value: string;
   playwright?: string;
 }
@@ -510,11 +521,6 @@ export interface RecordedFlow {
   mobilePackageName?: string;
   mobileAppName?: string;
   stepScreenshots?: Record<string, string>;
-  /** Web-only Playwright state captured when recording stops. */
-  webStorageState?: {
-    cookies: Array<Record<string, any>>;
-    origins: Array<Record<string, any>>;
-  };
 }
 
 export interface Project {
@@ -589,8 +595,19 @@ export interface SyntheticUser {
   customAttributes?: { key: string; value: string }[];
 }
 
-export type AutomationTool = 'Playwright' | 'Selenium' | 'Cypress' | 'Appium';
-export type ProgrammingLanguage = 'TypeScript' | 'JavaScript' | 'Python' | 'Java';
+export type AutomationTool = 
+  | 'Playwright' 
+  | 'Playwright (BDD/Cucumber)' 
+  | 'Cucumber (BDD)' 
+  | 'Selenium' 
+  | 'Selenium (BDD/Cucumber)' 
+  | 'Cypress' 
+  | 'Cypress (BDD/Cucumber)' 
+  | 'Appium'
+  | 'Puppeteer'
+  | 'RestAssured (API)'
+  | string;
+export type ProgrammingLanguage = 'TypeScript' | 'JavaScript' | 'Python' | 'Java' | 'C#' | string;
 
 export interface ScriptConfig {
   tool: AutomationTool;

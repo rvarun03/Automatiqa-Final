@@ -152,7 +152,7 @@ async function getElementAtCoordinates(deviceId, x, y) {
     const nodeRegex = /<node\s+([^>]*)\s*bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"([^>]*)\/?>/g;
     let match;
     let bestNodeAttributes = null;
-    let bestScore = Infinity;
+    let smallestArea = Infinity;
 
     while ((match = nodeRegex.exec(xmlContent)) !== null) {
       const allAttrs = (match[1] + ' ' + match[6]).trim();
@@ -163,9 +163,7 @@ async function getElementAtCoordinates(deviceId, x, y) {
 
       // Check if tap point is inside this node's bounds
       if (x >= x1 && x <= x2 && y >= y1 && y <= y2) {
-        const width = x2 - x1;
-        const height = y2 - y1;
-        const area = width * height;
+        const area = (x2 - x1) * (y2 - y1);
 
         // Extract attributes
         const getAttr = (name) => {
@@ -174,35 +172,23 @@ async function getElementAtCoordinates(deviceId, x, y) {
         };
 
         const isClickable = getAttr('clickable') === 'true';
-        const isFocused = getAttr('focused') === 'true';
         const hasText = !!getAttr('text');
         const hasDesc = !!getAttr('content-desc');
 
-        const hasResourceId = !!getAttr('resource-id');
-        // Semantic/clickable nodes are far more useful than a tiny anonymous
-        // child view. Area only breaks ties inside the same quality tier.
-        const isInput = /EditText$/i.test(getAttr('class'));
-        const qualityTier = isFocused && isInput ? -1
-          : isClickable && hasResourceId ? 0
-          : isClickable && hasDesc ? 1
-            : isClickable && hasText ? 2
-              : hasResourceId ? 3
-                : hasDesc ? 4
-                  : hasText ? 5
-                    : isClickable ? 6 : 7;
-        const areaScore = qualityTier * 1e12 + area;
+        // Prefer clickable or labeled elements
+        let areaScore = area;
+        if (isClickable || hasText || hasDesc) {
+          areaScore = area * 0.8; // Give priority
+        }
 
-        if (areaScore < bestScore) {
-          bestScore = areaScore;
+        if (areaScore < smallestArea) {
+          smallestArea = areaScore;
           bestNodeAttributes = {
             resourceId: getAttr('resource-id'),
             contentDescription: getAttr('content-desc'),
             text: getAttr('text'),
-            hint: getAttr('hint'),
-            password: getAttr('password') === 'true',
             className: getAttr('class') || 'android.view.View',
             clickable: isClickable,
-            focused: isFocused,
             bounds: `[${x1},${y1}][${x2},${y2}]`
           };
         }
@@ -250,24 +236,22 @@ async function getElementAtCoordinates(deviceId, x, y) {
     let primaryValue = '';
     let playwrightScript = '';
 
-    if (resourceId) {
-      primaryType = 'resource-id';
-      primaryValue = resourceId;
-      xpath = `//*[@resource-id="${resourceId}"]`;
-      playwrightScript = `await driver.elementById("${resourceId}").click();`;
+    if (text) {
+      primaryType = 'text';
+      primaryValue = text;
+      xpath = `//*[@text="${text}"]`;
+      playwrightScript = `const el = await driver.elementByXPath("//*[@text='${text}']");\nawait el.click();`;
     } else if (contentDescription) {
       primaryType = 'accessibility-id';
       primaryValue = contentDescription;
       xpath = `//*[@content-desc="${contentDescription}"]`;
       playwrightScript = `await driver.elementByAccessibilityId("${contentDescription}").click();`;
-    } else if (text) {
-      primaryType = 'text';
-      primaryValue = text;
-      xpath = `//*[@text="${text}"]`;
-      playwrightScript = `const el = await driver.elementByXPath("//*[@text='${text}']");\nawait el.click();`;
-    } else if (isNativeInteractiveControl) {
-      // Native inputs are still real Appium elements even when the application
-      // did not provide text, content-desc, or resource-id metadata.
+    } else if (resourceId) {
+      primaryType = 'resource-id';
+      primaryValue = resourceId;
+      xpath = `//*[@resource-id="${resourceId}"]`;
+      playwrightScript = `await driver.elementById("${resourceId}").click();`;
+    } else {
       primaryType = 'xpath';
       primaryValue = `//${className}[@bounds='${bounds}']`;
       xpath = primaryValue;
@@ -282,8 +266,6 @@ async function getElementAtCoordinates(deviceId, x, y) {
       hint,
       password,
       className,
-      bounds,
-      focused,
       xpath,
       primaryType,
       primaryValue,
@@ -295,13 +277,81 @@ async function getElementAtCoordinates(deviceId, x, y) {
   return null;
 }
 
+// Text typed with `adb shell input text` goes to whichever field holds focus, so
+// the focused node is the element the step should reference.
+async function getFocusedElement(deviceId, preloadedXml) {
+  try {
+    const xmlContent = preloadedXml || cachedXmlHierarchy.xml || await dumpUiHierarchy(deviceId);
+    if (!xmlContent) return null;
+
+    const nodeRegex = /<node\s+([^>]*?)\/?>/g;
+    let match;
+    while ((match = nodeRegex.exec(xmlContent)) !== null) {
+      const attrs = match[1];
+      const getAttr = (name) => {
+        const m = attrs.match(new RegExp(`${name}="([^"]*)"`));
+        return m ? m[1] : '';
+      };
+      if (getAttr('focused') !== 'true') continue;
+
+      const boundsMatch = getAttr('bounds').match(/^\[(\d+),(\d+)\]\[(\d+),(\d+)\]$/);
+      if (!boundsMatch) continue;
+      const centerX = Math.round((Number(boundsMatch[1]) + Number(boundsMatch[3])) / 2);
+      const centerY = Math.round((Number(boundsMatch[2]) + Number(boundsMatch[4])) / 2);
+      return await getElementAtCoordinates(deviceId, centerX, centerY, xmlContent);
+    }
+  } catch (err) {
+    console.error('Failed to resolve the focused element:', err.message);
+  }
+  return null;
+}
+
+// Appium code that drives the element itself rather than raw screen coordinates
+function buildAppiumScript(action, locatorAttr, params) {
+  const target = locatorAttr && locatorAttr.primaryValue
+    ? (locatorAttr.primaryType === 'resource-id'
+        ? `driver.elementById(${JSON.stringify(locatorAttr.primaryValue)})`
+        : locatorAttr.primaryType === 'accessibility-id'
+          ? `driver.elementByAccessibilityId(${JSON.stringify(locatorAttr.primaryValue)})`
+          : `driver.elementByXPath(${JSON.stringify(locatorAttr.xpath || locatorAttr.primaryValue)})`)
+    : '';
+
+  if (action === 'fill' || action === 'type') {
+    return target
+      ? `const el = await ${target};\nawait el.clear();\nawait el.sendKeys(${JSON.stringify(params.text || '')});`
+      : `await driver.keys(${JSON.stringify(params.text || '')});`;
+  }
+  if (action === 'press') {
+    const keyName = params.key || 'Back';
+    return `// Press ${keyName}\nawait driver.pressKeyCode(${keyName === 'Home' ? 3 : keyName === 'Recents' ? 187 : keyName === 'Enter' ? 66 : 4});`;
+  }
+  if (action === 'swipe' || action === 'scroll') {
+    const anchor = target ? `const el = await ${target};\n` : '';
+    return `${anchor}await driver.touchPerform([\n  { action: 'press', options: { x: ${params.x1}, y: ${params.y1} } },\n  { action: 'wait', options: { ms: ${params.duration || 300} } },\n  { action: 'moveTo', options: { x: ${params.x2}, y: ${params.y2} } },\n  { action: 'release' }\n]);`;
+  }
+  if (action === 'long_press') {
+    return target
+      ? `const el = await ${target};\nawait driver.touchPerform([{ action: 'longPress', options: { element: el.value } }, { action: 'release' }]);`
+      : `await driver.touchPerform([{ action: 'longPress', options: { x: ${params.x}, y: ${params.y} } }, { action: 'release' }]);`;
+  }
+  if (action === 'double_tap') {
+    return target
+      ? `const el = await ${target};\nawait el.click();\nawait el.click();`
+      : `await driver.touchPerform([{ action: 'tap', options: { x: ${params.x}, y: ${params.y}, count: 2 } }]);`;
+  }
+  // click / tap
+  return target
+    ? `await (await ${target}).click();`
+    : `await driver.touchPerform([{ action: 'tap', options: { x: ${params.x}, y: ${params.y} } }]);`;
+}
+
 function postJson(urlStr, data) {
   return new Promise((resolve, reject) => {
     try {
       const url = new URL(urlStr);
       const payload = JSON.stringify(data);
       const protocol = url.protocol === 'https:' ? https : http;
-      
+
       const req = protocol.request({
         hostname: url.hostname,
         port: url.port || (url.protocol === 'https:' ? 443 : 80),
@@ -322,7 +372,7 @@ function postJson(urlStr, data) {
           }
         });
       });
-      
+
       req.on('error', (err) => reject(err));
       req.write(payload);
       req.end();
@@ -337,7 +387,7 @@ function getJson(urlStr) {
     try {
       const url = new URL(urlStr);
       const protocol = url.protocol === 'https:' ? https : http;
-      
+
       const req = protocol.request({
         hostname: url.hostname,
         port: url.port || (url.protocol === 'https:' ? 443 : 80),
@@ -354,7 +404,7 @@ function getJson(urlStr) {
           }
         });
       });
-      
+
       req.on('error', (err) => reject(err));
       req.end();
     } catch(err) {
@@ -366,6 +416,7 @@ function getJson(urlStr) {
 let agentRunning = true;
 let activeRecordingSession = null;
 let lastUploadedFrameTime = 0;
+let lastUploadedHierarchyTime = 0;
 let touchListenerProcess = null;
 let currentListeningDevice = null;
 let touchDeviceBounds = { displayWidth: 1080, displayHeight: 2400, touchMaxX: 1080, touchMaxY: 2400 };
@@ -420,6 +471,25 @@ let typingBuffer = '';
 let typingTimer = null;
 let lastFocusedElement = null;
 let lastTrackedActivity = '';
+let lastForegroundPackage = '';
+
+// The package under test, as reported by the server with each heartbeat
+function getTargetPackage() {
+  return (activeRecordingSession && (activeRecordingSession.appPackage || activeRecordingSession.packageName)) || '';
+}
+
+// Only interactions with the app under test belong in the recording. Without this
+// check, tapping through the launcher or any app that happens to come to the
+// foreground is captured as a step of the flow.
+function isTargetInForeground() {
+  const target = getTargetPackage();
+  if (!target || !lastForegroundPackage) return true;
+  return lastForegroundPackage === target;
+}
+
+function skipForegroundMismatch(what) {
+  console.log(`[Recorder] Ignoring ${what}: "${lastForegroundPackage}" is in the foreground, not the app under test "${getTargetPackage()}".`);
+}
 
 function flushTypingBuffer(deviceId) {
   if (!typingBuffer) return;
@@ -437,7 +507,7 @@ function flushTypingBuffer(deviceId) {
         primary: {
           type: lastFocusedElement?.primaryType || 'xpath',
           value: lastFocusedElement?.primaryValue || lastFocusedElement?.xpath || `//android.widget.EditText`,
-          playwright: lastFocusedElement?.resourceId 
+          playwright: lastFocusedElement?.resourceId
             ? `await driver.elementById("${lastFocusedElement.resourceId}").sendKeys("${typedText}");`
             : `await driver.elementByXPath("//android.widget.EditText").sendKeys("${typedText}");`
         },
@@ -508,7 +578,7 @@ async function startAdbTouchListener(deviceId) {
               touchDeviceBounds.touchMaxX = Math.max(32767, currentRawX);
             }
           }
-        } 
+        }
         // Parse only absolute Y axis events; 0001 is not a safe Y identifier.
         else if (line.includes('ABS_MT_POSITION_Y') || /\bABS_Y\b/.test(line) || /\b0036\b/.test(line)) {
           const parts = line.trim().split(/\s+/);
@@ -527,7 +597,7 @@ async function startAdbTouchListener(deviceId) {
               const screenY = touchDeviceBounds.touchMaxY > touchDeviceBounds.displayHeight
                 ? Math.round((currentRawY / touchDeviceBounds.touchMaxY) * touchDeviceBounds.displayHeight)
                 : currentRawY;
-              elementAtTouchStart = getElementAtCoordinates(deviceId, screenX, screenY);
+              elementAtTouchStart = getElementAtCoordinates(deviceId, screenX, screenY, true);
             }
           }
         }
@@ -549,12 +619,12 @@ async function startAdbTouchListener(deviceId) {
               : rawY;
             // Start Appium/UIAutomator inspection before the tap can navigate
             // away from the element that the user actually touched.
-            elementAtTouchStart = getElementAtCoordinates(deviceId, screenX, screenY);
+            elementAtTouchStart = getElementAtCoordinates(deviceId, screenX, screenY, true);
           }
-        } 
+        }
         // Touch / Mouse Up or Release
         else if (
-          ((line.includes('BTN_TOUCH') || line.includes('BTN_LEFT') || line.includes('BTN_MOUSE')) && line.includes('UP')) || 
+          ((line.includes('BTN_TOUCH') || line.includes('BTN_LEFT') || line.includes('BTN_MOUSE')) && line.includes('UP')) ||
           (line.includes('ABS_MT_TRACKING_ID') && line.includes('ffffffff')) ||
           (line.includes('0039') && line.includes('ffffffff'))
         ) {
@@ -635,6 +705,12 @@ async function startAdbTouchListener(deviceId) {
 
 async function handleHardwareKeyPress(deviceId, keyName, keycode) {
   try {
+    // Home and App Switch leave the app under test, so the press itself is only
+    // a step when it happened while that app was in front.
+    if (!isTargetInForeground()) {
+      skipForegroundMismatch(`hardware key "${keyName}"`);
+      return;
+    }
     const stepPayload = {
       email: userEmail,
       event: {
@@ -671,20 +747,14 @@ async function handleHardwareKeyPress(deviceId, keyName, keycode) {
 
 async function handlePhysicalEmulatorTap(deviceId, x, y, elementPromise) {
   try {
-    console.log(`[ADB Tap Event] Detected physical tap at coordinates (${x}, ${y}) on ${deviceId}`);
-    const beforeTapElement = await (elementPromise || Promise.resolve(null));
-    // Inputs can expose their useful accessibility node only after receiving
-    // focus. Re-inspect after the tap and prefer the newly focused EditText.
-    await new Promise(resolve => setTimeout(resolve, 120));
-    const afterTapElement = await getElementAtCoordinates(deviceId, x, y);
-    const locatorAttr = afterTapElement?.focused || !beforeTapElement
-      ? afterTapElement
-      : beforeTapElement;
-    if (/EditText$/i.test(locatorAttr?.className || '')) {
-      lastFocusedElement = locatorAttr;
+    if (!isTargetInForeground()) {
+      skipForegroundMismatch(`physical tap at (${x}, ${y})`);
+      return;
     }
-    
-    const labelName = getAndroidElementName(locatorAttr) || `Screen position`;
+    console.log(`[ADB Tap Event] Detected physical tap at coordinates (${x}, ${y}) on ${deviceId}`);
+    const locatorAttr = await getElementAtCoordinates(deviceId, x, y);
+
+    const labelName = getAndroidElementName(locatorAttr) || `Unlabelled Android element`;
     const playwrightCode = locatorAttr?.playwrightScript || `await driver.touchPerform([{ action: 'tap', options: { x: ${x}, y: ${y} } }]);`;
 
     const stepPayload = {
@@ -719,7 +789,7 @@ async function handlePhysicalEmulatorTap(deviceId, x, y, elementPromise) {
     };
 
     console.log(`🟢 [ADB Recorded Step] Action: CLICK on "${labelName}"`);
-    
+
     // Post to both endpoints for instant UI synchronization
     await postJson(`${serverUrl}/api/device-agent/record-event`, stepPayload).catch(() => {});
     await postJson(`${serverUrl}/api/mobile/agent/record-event`, stepPayload).catch(() => {});
@@ -748,11 +818,20 @@ function getAndroidElementName(locatorAttr) {
     if (locatorAttr.hint) return `${locatorAttr.hint} field`;
     return 'Text field';
   }
-  const semanticName = locatorAttr.text || locatorAttr.contentDescription || locatorAttr.accessibilityId;
-  if (semanticName && String(semanticName).trim()) return String(semanticName).trim();
+  const semanticName = locatorAttr.contentDescription || locatorAttr.accessibilityId || locatorAttr.text;
+  if (semanticName && /[a-z0-9]{2}/i.test(String(semanticName))) return String(semanticName).trim();
   if (locatorAttr.resourceId) {
     const id = String(locatorAttr.resourceId).split(/[:/]id\//).pop() || String(locatorAttr.resourceId);
-    return id.replace(/[_-]+/g, ' ').replace(/\b\w/g, c => c.toUpperCase()).trim();
+    const words = id
+      .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+      .replace(/[_-]+/g, ' ')
+      .replace(/^(?:btn|button|toolbar|nav|navigation)\s+/i, '')
+      .trim();
+    if (/arrow\s*back|back\s*arrow|navigate\s*up/i.test(words)) return 'Back button';
+    if (/profile|account|avatar/i.test(words)) return 'Profile button';
+    if (/^(?:container|content|root|layout|view|wrapper|item|row|column|frame|screen)$/i.test(words)) return '';
+    const title = words.replace(/\b\w/g, c => c.toUpperCase());
+    return /Button$/i.test(className) && !/\bbutton$/i.test(title) ? `${title} button` : title;
   }
   if (/Button/i.test(className)) return 'Button';
   return className && className !== 'View' ? className.replace(/([a-z])([A-Z])/g, '$1 $2') : '';
@@ -771,7 +850,7 @@ async function startHeartbeat() {
       };
 
       const res = await postJson(`${serverUrl}/api/mobile/agent/register`, payload);
-      
+
       if (res && res.recording) {
         activeRecordingSession = res.recording;
       }
@@ -784,6 +863,7 @@ async function startHeartbeat() {
 }
 
 let lastActivityCheckTime = 0;
+let lastHierarchyRefreshTime = 0;
 
 async function startStreamingAndCommandPolling() {
   while (agentRunning) {
@@ -800,6 +880,12 @@ async function startStreamingAndCommandPolling() {
 
       // 1. Continuously capture & stream screenshots to AutomatiQA backend
       const now = Date.now();
+      // Keep a recent pre-interaction DOM snapshot. A hierarchy request begun
+      // on touch-down can otherwise finish after a button mutates its label.
+      if (now - lastHierarchyRefreshTime >= 1200) {
+        lastHierarchyRefreshTime = now;
+        refreshCachedXmlHierarchy(deviceId).catch(() => '');
+      }
       if (now - lastUploadedFrameTime >= 400) {
         const frame = await captureScreenshot(deviceId);
         if (frame) {
@@ -811,6 +897,20 @@ async function startStreamingAndCommandPolling() {
         }
       }
 
+      // 1b. Stream the real UIAutomator hierarchy so the recorder can resolve
+      // taps to actual app nodes instead of raw screen coordinates.
+      if (now - lastUploadedHierarchyTime >= 1500) {
+        lastUploadedHierarchyTime = now;
+        const xml = await dumpUiHierarchy(deviceId).catch(() => '');
+        if (xml) {
+          await postJson(`${serverUrl}/api/device-agent/upload-hierarchy`, {
+            email: userEmail,
+            xml,
+            deviceId
+          }).catch(() => {});
+        }
+      }
+
       // 2. Track screen navigation / Activity changes
       if (now - lastActivityCheckTime >= 1200) {
         lastActivityCheckTime = now;
@@ -819,7 +919,12 @@ async function startStreamingAndCommandPolling() {
           const actMatch = winFocus.stdout.match(/([a-zA-Z0-9_\.]+\/[a-zA-Z0-9_\.]+)/);
           if (actMatch) {
             const currentAct = actMatch[1];
-            if (lastTrackedActivity && lastTrackedActivity !== currentAct) {
+            lastForegroundPackage = currentAct.split('/')[0];
+            const target = getTargetPackage();
+            // A transition into the launcher or an unrelated app is not a step of
+            // this flow, so track it but do not record it.
+            const isTargetScreen = !target || lastForegroundPackage === target;
+            if (lastTrackedActivity && lastTrackedActivity !== currentAct && isTargetScreen) {
               console.log(`🟢 [ADB Navigation Captured] Screen transition to: ${currentAct}`);
               const screenName = currentAct.split('/')[1] || currentAct;
               const navPayload = {
@@ -860,7 +965,6 @@ async function startStreamingAndCommandPolling() {
 
           let cmd = '';
           let locatorAttr = null;
-          let locatorPromise = null;
 
           if (action === 'click' || action === 'tap' || action === 'double_tap' || action === 'long_press') {
             cmd = `adb -s ${actionDeviceId} shell input tap ${params.x} ${params.y}`;
@@ -875,10 +979,16 @@ async function startStreamingAndCommandPolling() {
           } else if (action === 'type' || action === 'fill') {
             const escaped = (params.text || '').replace(/ /g, '%s');
             cmd = `adb -s ${actionDeviceId} shell input text "${escaped}"`;
+            // Text lands in the focused field, so that node identifies the step
+            const preXml = await getHierarchyBeforeGesture(actionDeviceId);
+            locatorAttr = await getFocusedElement(actionDeviceId, preXml).catch(() => null);
           } else if (action === 'clear') {
             cmd = `adb -s ${actionDeviceId} shell input keyevent 67`.repeat(25).replace(/adb/g, '&& adb').substring(3);
           } else if (action === 'swipe' || action === 'scroll') {
             cmd = `adb -s ${actionDeviceId} shell input swipe ${params.x1} ${params.y1} ${params.x2} ${params.y2} ${params.duration || 300}`;
+            // Anchor the gesture to the element it started on
+            const preXml = await getHierarchyBeforeGesture(actionDeviceId);
+            locatorAttr = await getElementAtCoordinates(actionDeviceId, params.x1, params.y1, preXml).catch(() => null);
           } else if (action === 'press') {
             let keycode = 4; // Back default
             if (params.key === 'Home') keycode = 3;
@@ -892,7 +1002,7 @@ async function startStreamingAndCommandPolling() {
             const pkg = params.packageName || 'com.machaxi.app';
             const targetDev = (params.deviceId && !params.deviceId.includes(' ') && params.deviceId.length < 30) ? params.deviceId : deviceId;
             console.log(`[ADB Agent] Launching package "${pkg}" on target ADB device "${targetDev}"...`);
-            
+
             // Wake up screen & dismiss keyguard lock
             await runCmd(`adb -s ${targetDev} shell input keyevent 224`);
             await runCmd(`adb -s ${targetDev} shell wm dismiss-keyguard`);
@@ -913,7 +1023,7 @@ async function startStreamingAndCommandPolling() {
             } else {
               // Primary: Monkey launcher (resolves default activity automatically)
               let launchRes = await runCmd(`adb -s ${targetDev} shell monkey -p ${pkg} -c android.intent.category.LAUNCHER 1`);
-              
+
               if (!launchRes.success || (launchRes.stdout && launchRes.stdout.includes('No activities found'))) {
                 const act = params.launchActivity || '.MainActivity';
                 launchRes = await runCmd(`adb -s ${targetDev} shell am start -n ${pkg}/${act}`);
@@ -934,18 +1044,15 @@ async function startStreamingAndCommandPolling() {
           }
 
           if (cmd) {
+            if (locatorPromise) {
+              locatorAttr = await locatorPromise.catch(() => null);
+            }
             await runCmd(cmd);
 
             // Resolve the node after the ADB command has already been sent. The
             // promise started before the tap, so it describes the tapped screen.
             if (locatorPromise) {
               locatorAttr = await locatorPromise.catch(() => null);
-              if (action === 'click' || action === 'tap') {
-                await new Promise(resolve => setTimeout(resolve, 120));
-                const focusedAttr = await getElementAtCoordinates(actionDeviceId, params.x, params.y).catch(() => null);
-                if (focusedAttr?.focused || !locatorAttr) locatorAttr = focusedAttr;
-                if (/EditText$/i.test(locatorAttr?.className || '')) lastFocusedElement = locatorAttr;
-              }
             }
 
             await postJson(`${serverUrl}/api/device-agent/upload-logs`, {
@@ -965,8 +1072,8 @@ async function startStreamingAndCommandPolling() {
                 elementName: labelName,
                 locator: {
                   primary: {
-                    type: locatorAttr?.primaryType || 'coordinates',
-                    value: locatorAttr?.primaryValue || locatorAttr?.xpath || JSON.stringify({ x: params.x, y: params.y, unit: 'pixels' }),
+                    type: locatorAttr?.primaryType || 'xpath',
+                    value: locatorAttr?.primaryValue || locatorAttr?.xpath || `//android.view.View`,
                     playwright: locatorAttr?.playwrightScript || ((action === 'click' || action === 'tap')
                       ? `await driver.touchPerform([{ action: 'tap', options: { x: ${params.x}, y: ${params.y} } }]);`
                       : action === 'fill' || action === 'type'
@@ -983,6 +1090,10 @@ async function startStreamingAndCommandPolling() {
                       : null
                   ].filter(Boolean)
                 },
+                // Records whether this step points at a real node from the app's
+                // UI hierarchy, or only at screen coordinates
+                resolvedFromHierarchy: !!locatorAttr,
+                className: locatorAttr?.className,
                 screen: "ActiveScreen",
                 platform: 'mobile',
                 x: params.x,

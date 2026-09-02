@@ -851,6 +851,7 @@ __export(geminiService_exports, {
   correctFigmaDesignIssues: () => correctFigmaDesignIssues,
   correctUIComparisonDiscrepancies: () => correctUIComparisonDiscrepancies,
   correctUIIssues: () => correctUIIssues,
+  deduplicateRecordedSteps: () => deduplicateRecordedSteps,
   enhanceRecordedScript: () => enhanceRecordedScript,
   formatGeminiError: () => formatGeminiError,
   generateAppiumScript: () => generateAppiumScript,
@@ -868,9 +869,11 @@ __export(geminiService_exports, {
   generateUserStoriesFromDoc: () => generateUserStoriesFromDoc,
   generateWebPerformanceAnalysis: () => generateWebPerformanceAnalysis,
   getLastUsageMetadata: () => getLastUsageMetadata,
+  isDuplicateOfRecordedStep: () => isDuplicateOfRecordedStep,
   parsePlaywrightCodeToSteps: () => parsePlaywrightCodeToSteps,
   performFigmaDesignReview: () => performFigmaDesignReview,
   performUITesting: () => performUITesting,
+  pickRicherRecordedStep: () => pickRicherRecordedStep,
   refineAutomationScript: () => refineAutomationScript,
   setLastUsageMetadata: () => setLastUsageMetadata
 });
@@ -4741,6 +4744,111 @@ A clear step-by-step checkbox list for developers to execute and verify each fix
   }));
   return response.text || "Failed to generate resolution guide.";
 };
+var REPEATABLE_ACTIONS = /* @__PURE__ */ new Set(["click", "tap", "double_tap", "swipe", "scroll", "long_press", "press"]);
+var DUPLICATE_CAPTURE_WINDOW_MS = 1500;
+var normalizeAction = (s) => {
+  const action = String(s?.action || "").toLowerCase();
+  return action === "tap" ? "click" : action === "type" ? "fill" : action;
+};
+var getStepSignature = (s) => {
+  if (!s) return "";
+  const action = normalizeAction(s);
+  const loc = String(s.locator?.primary?.value || "").trim();
+  const target = String(s.url || s.value || "").trim().replace(/\/+$/, "");
+  const el = String(s.elementName || "").trim().toLowerCase();
+  if (action === "navigate") return `navigate|${target.toLowerCase()}`;
+  return `${action}|${loc}|${el}|${target}`;
+};
+var getStepDetailScore = (s) => {
+  if (!s) return -1;
+  let score = 0;
+  const type = String(s.locator?.primary?.type || "").toLowerCase();
+  if (String(s.locator?.primary?.value || "").trim()) score += 2;
+  if (["resource-id", "accessibility-id", "content-desc", "testid", "role", "label"].includes(type)) score += 3;
+  else if (["text", "css"].includes(type)) score += 2;
+  else if (type === "xpath") score += 1;
+  if (Array.isArray(s.locator?.alternatives)) score += Math.min(s.locator.alternatives.length, 3);
+  if (s.locator?.primary?.playwright) score += 1;
+  const el = String(s.elementName || "").trim();
+  if (el && !/^(?:tap at|element at|coordinates|resolving)/i.test(el)) score += 2;
+  return score;
+};
+var isCoordinatePlaceholder = (s) => !String(s?.locator?.primary?.value || "").trim() && /^(?:tap at|element at|coordinates|resolving)/i.test(String(s?.elementName || "").trim());
+var isSameInteraction = (a, b) => {
+  if (normalizeAction(a) !== normalizeAction(b)) return false;
+  if (isCoordinatePlaceholder(a) !== isCoordinatePlaceholder(b)) return true;
+  const locA = String(a.locator?.primary?.value || "").trim();
+  const locB = String(b.locator?.primary?.value || "").trim();
+  if (locA && locB) return locA === locB;
+  const elA = String(a.elementName || "").trim().toLowerCase();
+  const elB = String(b.elementName || "").trim().toLowerCase();
+  if (elA && elB) return elA === elB;
+  const valA = String(a.value || "").trim().toLowerCase();
+  const valB = String(b.value || "").trim().toLowerCase();
+  return !!valA && valA === valB;
+};
+var withinCaptureWindow = (a, b) => {
+  const ta = Number(a?.lastSeenAt) || Number(a?.timestamp) || 0;
+  const tb = Number(b?.timestamp) || 0;
+  if (!ta || !tb) return true;
+  return Math.abs(tb - ta) <= DUPLICATE_CAPTURE_WINDOW_MS;
+};
+var isDuplicateOfRecordedStep = (lastStep, incoming) => {
+  if (!lastStep || !incoming) return false;
+  if (!REPEATABLE_ACTIONS.has(normalizeAction(incoming))) return false;
+  return isSameInteraction(lastStep, incoming) && withinCaptureWindow(lastStep, incoming);
+};
+var pickRicherRecordedStep = (lastStep, incoming) => {
+  const kept = getStepDetailScore(incoming) > getStepDetailScore(lastStep) ? { ...incoming, id: lastStep.id, timestamp: lastStep.timestamp ?? incoming.timestamp } : { ...lastStep };
+  kept.lastSeenAt = Number(incoming?.timestamp) || Date.now();
+  return kept;
+};
+var deduplicateRecordedSteps = (steps) => {
+  if (!Array.isArray(steps) || steps.length < 2) return Array.isArray(steps) ? steps.filter(Boolean) : [];
+  let working = steps.filter(Boolean);
+  const signatures = working.map(getStepSignature);
+  const startsWithNavigation = normalizeAction(working[0]) === "navigate";
+  for (let blockSize = 2; startsWithNavigation && blockSize <= Math.floor(working.length / 2); blockSize++) {
+    if (working.length % blockSize !== 0) continue;
+    let isRepeatedBlock = true;
+    for (let i = blockSize; i < signatures.length && isRepeatedBlock; i++) {
+      if (signatures[i] !== signatures[i % blockSize]) isRepeatedBlock = false;
+    }
+    if (isRepeatedBlock) {
+      working = working.slice(0, blockSize);
+      break;
+    }
+  }
+  const result = [];
+  for (const s of working) {
+    const prev = result[result.length - 1];
+    if (!prev) {
+      result.push(s);
+      continue;
+    }
+    const action = normalizeAction(s);
+    const prevAction = normalizeAction(prev);
+    const loc = String(s.locator?.primary?.value || "").trim();
+    const prevLoc = String(prev.locator?.primary?.value || "").trim();
+    if (action === "navigate" && prevAction === "navigate" && getStepSignature(s) === getStepSignature(prev)) {
+      continue;
+    }
+    if (action === "fill" && prevAction === "fill" && loc && prevLoc && loc === prevLoc) {
+      prev.value = s.value;
+      continue;
+    }
+    if (action === "fill" && prevAction === "click" && loc && prevLoc && loc === prevLoc) {
+      result[result.length - 1] = s;
+      continue;
+    }
+    if (REPEATABLE_ACTIONS.has(action) && isSameInteraction(prev, s) && withinCaptureWindow(prev, s)) {
+      result[result.length - 1] = pickRicherRecordedStep(prev, s);
+      continue;
+    }
+    result.push(s);
+  }
+  return result.map(({ lastSeenAt, ...step }) => step);
+};
 var generateLocalOptimizedSteps = (flowName, steps, tool = "Playwright", language = "TypeScript") => {
   if (!Array.isArray(steps) || steps.length === 0) {
     return {
@@ -4750,9 +4858,10 @@ var generateLocalOptimizedSteps = (flowName, steps, tool = "Playwright", languag
       explanation: "No steps recorded."
     };
   }
+  const dedupedSteps = deduplicateRecordedSteps(steps);
   const cleanedSteps = [];
-  for (let i = 0; i < steps.length; i++) {
-    const s = steps[i];
+  for (let i = 0; i < dedupedSteps.length; i++) {
+    const s = dedupedSteps[i];
     if (!s) continue;
     const prev = cleanedSteps[cleanedSteps.length - 1];
     if (prev && prev.action === "click" && s.action === "click") {
@@ -4859,11 +4968,12 @@ class ${pageName} {
     optimizedSteps: cleanedSteps,
     pomStructure: pomStructure || "// Page Object Model structure initialized.",
     suggestedTitle: flowName ? `${flowName} - Enhanced Test Flow` : "Automated Recorded Flow",
-    explanation: `Successfully optimized ${cleanedSteps.length} recorded steps into Page Object Model structure with clean locators.`
+    explanation: `Optimized ${steps.length} recorded steps into ${cleanedSteps.length} unique steps${steps.length > cleanedSteps.length ? ` (removed ${steps.length - cleanedSteps.length} repeated step${steps.length - cleanedSteps.length === 1 ? "" : "s"})` : ""} with Page Object Model structure and clean locators.`
   };
 };
 var enhanceRecordedScript = async (flowName, steps, tool, language) => {
-  const sanitizedSteps = (steps || []).map((s) => ({
+  const uniqueSteps = deduplicateRecordedSteps(steps || []);
+  const sanitizedSteps = uniqueSteps.map((s) => ({
     id: String(s.id || Math.random().toString(36).substring(2, 9)),
     action: s.action || "click",
     screen: s.screen || "MainPage",
@@ -4888,12 +4998,12 @@ var enhanceRecordedScript = async (flowName, steps, tool, language) => {
         new Promise((_, reject) => setTimeout(() => reject(new Error("AI Enhancement timed out")), 1e4))
       ]);
       if (response && response.optimizedSteps && response.optimizedSteps.length > 0) {
-        return response;
+        return { ...response, optimizedSteps: deduplicateRecordedSteps(response.optimizedSteps) };
       }
-      return generateLocalOptimizedSteps(flowName, steps, tool, language);
+      return generateLocalOptimizedSteps(flowName, uniqueSteps, tool, language);
     } catch (err) {
       console.warn("AI enhancement failed or timed out in browser, using local optimizer:", err);
-      return generateLocalOptimizedSteps(flowName, steps, tool, language);
+      return generateLocalOptimizedSteps(flowName, uniqueSteps, tool, language);
     }
   }
   const prompt = `
@@ -5005,7 +5115,7 @@ var enhanceRecordedScript = async (flowName, steps, tool, language) => {
       });
       const parsed = JSON.parse(response.text || "{}");
       const rawOptSteps = Array.isArray(parsed.optimizedSteps) ? parsed.optimizedSteps : [];
-      const guaranteedSteps = steps.map((origStep, idx) => {
+      const guaranteedSteps = uniqueSteps.map((origStep, idx) => {
         const aiStep = rawOptSteps.find((s) => s && s.id === origStep.id) || rawOptSteps[idx];
         if (!aiStep) return origStep;
         return {
@@ -5029,7 +5139,7 @@ var enhanceRecordedScript = async (flowName, steps, tool, language) => {
         };
       });
       return {
-        optimizedSteps: guaranteedSteps,
+        optimizedSteps: deduplicateRecordedSteps(guaranteedSteps),
         pomStructure: parsed.pomStructure || "POM Structure generated.",
         suggestedTitle: parsed.suggestedTitle || flowName,
         explanation: parsed.explanation || "All recorded steps processed and enhanced."
@@ -5037,7 +5147,7 @@ var enhanceRecordedScript = async (flowName, steps, tool, language) => {
     });
   } catch (error) {
     console.error("Script Enhancement Error:", error);
-    return generateLocalOptimizedSteps(flowName, steps, tool, language);
+    return generateLocalOptimizedSteps(flowName, uniqueSteps, tool, language);
   }
 };
 var correctUIIssues = async (originalReport, screenshots) => {
@@ -7056,6 +7166,12 @@ try {
 } catch (adminErr) {
   console.warn("Admin Firestore initialization warning:", adminErr);
 }
+var RECORDING_VIDEO_ROOT = import_path3.default.join(process.cwd(), "recordings", "videos");
+try {
+  import_fs4.default.mkdirSync(RECORDING_VIDEO_ROOT, { recursive: true });
+} catch (e) {
+  console.warn("Could not create the recording video directory:", e);
+}
 var sessions = /* @__PURE__ */ new Map();
 var sessionPrimaryOrigins = /* @__PURE__ */ new Map();
 async function classifyUrl(rawUrl) {
@@ -7625,6 +7741,7 @@ async function startServer() {
         sendCapturedStep("navigate", document.body, { value: currentCapturedUrl, url: currentCapturedUrl });
       }
       const checkAndRecordNav = () => {
+        if (isIframe) return;
         if (window.location.href !== currentCapturedUrl && window.location.href !== "about:blank") {
           currentCapturedUrl = window.location.href;
           sendCapturedStep("navigate", document.body, { value: currentCapturedUrl, url: currentCapturedUrl });
@@ -7837,7 +7954,7 @@ async function startServer() {
   app2.use(import_express.default.urlencoded({ limit: "200mb", extended: true }));
   const handleProxiedSubresource = async (req, res, next) => {
     const fullPath = (req.originalUrl || req.url || req.path || "").toLowerCase();
-    const isInternalApi = fullPath.startsWith("/api/proxy") || fullPath.startsWith("/api/start-recording") || fullPath.startsWith("/api/stop-recording") || fullPath.startsWith("/api/record-event") || fullPath.startsWith("/api/validate-url") || fullPath.startsWith("/api/capture-url-ui") || fullPath.startsWith("/api/run-playback") || fullPath.startsWith("/api/health") || fullPath.startsWith("/api/gemini/") || fullPath.startsWith("/api/mobile") || fullPath.startsWith("/api/device-agent/") || fullPath.startsWith("/api/integration/") || fullPath.startsWith("/api/rag/") || fullPath.startsWith("/api/cache/") || fullPath.startsWith("/api/auth/") || fullPath.startsWith("/api/jmeter-performance/") || fullPath.startsWith("/api/web-performance/") || fullPath.startsWith("/api/parse-playwright") || fullPath.startsWith("/api/download-agent-binary") || fullPath.startsWith("/api/artifacts") || fullPath.startsWith("/artifacts") || fullPath.startsWith("/api/extract-video-frames") || fullPath.startsWith("/api/grant-permission") || fullPath.startsWith("/api/deny-permission");
+    const isInternalApi = fullPath.startsWith("/api/proxy") || fullPath.startsWith("/api/start-recording") || fullPath.startsWith("/api/stop-recording") || fullPath.startsWith("/api/record-event") || fullPath.startsWith("/api/validate-url") || fullPath.startsWith("/api/capture-url-ui") || fullPath.startsWith("/api/recording-video/") || fullPath.startsWith("/api/run-playback") || fullPath.startsWith("/api/health") || fullPath.startsWith("/api/gemini/") || fullPath.startsWith("/api/mobile") || fullPath.startsWith("/api/device-agent/") || fullPath.startsWith("/api/integration/") || fullPath.startsWith("/api/rag/") || fullPath.startsWith("/api/cache/") || fullPath.startsWith("/api/auth/") || fullPath.startsWith("/api/jmeter-performance/") || fullPath.startsWith("/api/web-performance/") || fullPath.startsWith("/api/parse-playwright") || fullPath.startsWith("/api/download-agent-binary") || fullPath.startsWith("/api/artifacts") || fullPath.startsWith("/artifacts") || fullPath.startsWith("/api/extract-video-frames") || fullPath.startsWith("/api/grant-permission") || fullPath.startsWith("/api/deny-permission");
     const rawUrl = req.url || "";
     if (isInternalApi || rawUrl.includes("?import") || rawUrl.includes("?raw") || rawUrl.includes("?worker") || rawUrl.includes("?url") || rawUrl.includes("?t=") || rawUrl.includes("?v=") || fullPath.startsWith("/src/") || fullPath.startsWith("/@") || fullPath.includes("/node_modules/") || fullPath.startsWith("/components/") || fullPath.startsWith("/services/") || fullPath.startsWith("/utils/") || fullPath.startsWith("/types") || fullPath.endsWith(".tsx") || fullPath.endsWith(".ts") || fullPath.endsWith(".jsx") || fullPath === "/app.tsx" || fullPath === "/index.html" || fullPath === "/index.tsx" || fullPath === "/index.css" || fullPath === "/firebase.ts" || fullPath === "/geminiservice.ts" || fullPath === "/users.json" || fullPath === "/firebase-applet-config.json" || fullPath === "/metadata.json" || fullPath === "/" || fullPath === "/automatiqa-agent.js" || fullPath === "/automatiqa-agent.cjs") {
       return next();
@@ -8406,7 +8523,7 @@ async function startServer() {
               // Helper to resolve URLs against current target
               const resolveUrl = (url) => {
                 if (!url || typeof url !== 'string' || url.startsWith('data:') || url.startsWith('javascript:') || url.startsWith('#') || url.startsWith('blob:') || url.startsWith('mailto:') || url.startsWith('tel:')) return url;
-                
+
                 // If url is already a proxy url, extract the underlying target URL
                 if (url.includes('/api/proxy?url=') || url.includes('/api/proxy?')) {
                   try {
@@ -8447,7 +8564,7 @@ async function startServer() {
                 if (!url || typeof url !== 'string') return url;
                 if (url.startsWith('/api/proxy') || url.includes('/api/proxy?url=')) return url;
                 if (isInternalAutomatiqaPath(url)) return url;
-                
+
                 const absolute = resolveUrl(url);
                 if (absolute.includes('/api/proxy') || isInternalAutomatiqaPath(absolute)) return absolute;
 
@@ -8587,13 +8704,13 @@ async function startServer() {
                       return; // Do not apply SRI hash to avoid browser blocking of proxied assets
                     }
                     if (typeof value === 'string') {
-                      if ((lowerName === 'src' || lowerName === 'href' || lowerName === 'action' || lowerName === 'data-src' || lowerName === 'data-original' || lowerName === 'data-lazy-src' || lowerName === 'data-bg' || lowerName === 'data-url') && 
-                          value && 
-                          !value.startsWith('/api/proxy') && 
-                          !value.startsWith('data:') && 
-                          !value.startsWith('blob:') && 
-                          !value.startsWith('#') && 
-                          !value.startsWith('javascript:') && 
+                      if ((lowerName === 'src' || lowerName === 'href' || lowerName === 'action' || lowerName === 'data-src' || lowerName === 'data-original' || lowerName === 'data-lazy-src' || lowerName === 'data-bg' || lowerName === 'data-url') &&
+                          value &&
+                          !value.startsWith('/api/proxy') &&
+                          !value.startsWith('data:') &&
+                          !value.startsWith('blob:') &&
+                          !value.startsWith('#') &&
+                          !value.startsWith('javascript:') &&
                           !isInternalAutomatiqaPath(value)) {
                         value = proxyUrl(value);
                       }
@@ -8661,7 +8778,7 @@ async function startServer() {
                     }
                   } catch (e) {}
                 }
-                
+
                 return originalFetch.call(this, finalUrl, options).catch(err => {
                   captureLog('error', ['Fetch notice:', String(finalUrl), err.message]);
                   throw err;
@@ -8713,14 +8830,14 @@ async function startServer() {
                   updateTargetUrlFromPath(url);
                 }
                 const actualUrl = currentTargetUrl || initialTargetUrl;
-                
+
                 // Allow the SPA router to maintain its intended internal path
                 const result = originalPushState.apply(this, [state, title, url]);
                 restoreProxyHistoryUrl(state, title, actualUrl);
-                
+
                 if (actualUrl !== lastUrl) {
                   lastUrl = actualUrl;
-                  sendEvent("navigate", document.body, { 
+                  sendEvent("navigate", document.body, {
                     value: actualUrl,
                     url: actualUrl
                   });
@@ -8733,12 +8850,12 @@ async function startServer() {
                   updateTargetUrlFromPath(url);
                 }
                 const actualUrl = currentTargetUrl || initialTargetUrl;
-                
+
                 const result = originalReplaceState.apply(this, [state, title, url]);
                 restoreProxyHistoryUrl(state, title, actualUrl);
                 if (actualUrl !== lastUrl) {
                   lastUrl = actualUrl;
-                  sendEvent("navigate", document.body, { 
+                  sendEvent("navigate", document.body, {
                     value: actualUrl,
                     url: actualUrl
                   });
@@ -8751,7 +8868,7 @@ async function startServer() {
                 const actualUrl = currentTargetUrl || getTargetUrl();
                 if (actualUrl !== lastUrl) {
                   lastUrl = actualUrl;
-                  sendEvent("navigate", document.body, { 
+                  sendEvent("navigate", document.body, {
                     value: actualUrl,
                     url: actualUrl
                   });
@@ -8763,7 +8880,7 @@ async function startServer() {
                 const actualUrl = currentTargetUrl || getTargetUrl();
                 if (actualUrl !== lastUrl) {
                   lastUrl = actualUrl;
-                  sendEvent("navigate", document.body, { 
+                  sendEvent("navigate", document.body, {
                     value: actualUrl,
                     url: actualUrl
                   });
@@ -8847,7 +8964,7 @@ async function startServer() {
                 overlay.id = 'qa-recorder-overlay';
                 overlay.style.cssText = 'position: fixed; bottom: 20px; right: 20px; background: #0f172a; color: #f8fafc; padding: 10px 16px; border-radius: 14px; font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; font-size: 11px; font-weight: bold; z-index: 999999; box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.4), 0 0 0 1px rgba(255, 255, 255, 0.1); border: 1px solid #334155; display: flex; align-items: center; gap: 10px; pointer-events: auto; user-select: none; transition: all 0.3s ease;';
                 overlay.innerHTML = '<div style="display: flex; align-items: center; gap: 8px;"><div style="width: 8px; height: 8px; background: #ef4444; border-radius: 50%; animation: qa-pulse 2s infinite;"></div><span style="text-transform: uppercase; letter-spacing: 0.05em; color: #f1f5f9;">Recording</span></div><div style="width: 1px; height: 16px; background: #334155;"></div><div id="qa-overlay-url" style="max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #94a3b8;">' + (currentTargetUrl || initialTargetUrl) + '</div><div style="width: 1px; height: 16px; background: #334155;"></div><button id="qa-add-custom-step-btn" title="Add Functional Step or Checkpoint (+)" style="background: #4f46e5; color: #ffffff; border: none; border-radius: 8px; padding: 4px 10px; font-size: 10px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.05em; cursor: pointer; display: flex; align-items: center; gap: 4px; transition: all 0.2s ease;">+ Step</button>';
-                
+
                 const style = document.createElement('style');
                 style.textContent = '@keyframes qa-pulse { 0% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.7); } 70% { transform: scale(1); box-shadow: 0 0 0 6px rgba(239, 68, 68, 0); } 100% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(239, 68, 68, 0); } } #qa-recorder-overlay:hover { transform: translateY(-2px); box-shadow: 0 15px 30px -5px rgba(0, 0, 0, 0.5); } #qa-add-custom-step-btn:hover { background: #4338ca; }';
                 document.head.appendChild(style);
@@ -8879,7 +8996,7 @@ async function startServer() {
               // --- Element Highlighting ---
               let lastHighlighted = null;
               const HIGHLIGHT_STYLE = "outline: 2px solid #6366f1 !important; outline-offset: -2px !important; cursor: crosshair !important; transition: all 0.2s ease !important;";
-              
+
               const highlight = (el) => {
                 if (lastHighlighted === el) return;
                 unhighlight();
@@ -8934,10 +9051,10 @@ async function startServer() {
                   'SELECT': 'combobox',
                   'H1': 'heading', 'H2': 'heading', 'H3': 'heading', 'H4': 'heading', 'H5': 'heading', 'H6': 'heading',
                 };
-                
+
                 const tagName = el.tagName.toUpperCase();
                 const role = el.getAttribute("role") || roleMap[tagName];
-                
+
                 if (role) {
                   let accessibleName = el.innerText?.trim() || el.getAttribute("aria-label") || el.getAttribute("title") || el.placeholder || el.value;
                   if (accessibleName) {
@@ -8991,7 +9108,7 @@ async function startServer() {
                   }
                   return path.join(" > ");
                 };
-                
+
                 const uniqueCss = getUniqueCssSelector(el);
                 return { type: "css", value: uniqueCss, playwright: \`page.locator('\${uniqueCss}')\` };
               };
@@ -8999,7 +9116,7 @@ async function startServer() {
               // --- Event Capture ---
               const sendEvent = (action, el, extra = {}) => {
                 if (!el && action !== 'navigate') return;
-                
+
                 let target = el;
                 let locator;
                 if (action === 'navigate') {
@@ -9013,7 +9130,7 @@ async function startServer() {
                   }
 
                   locator = getBestLocator(target);
-                  
+
                   // Visual feedback on capture
                   if (target && target.style) {
                     const originalOutline = target.style.outline;
@@ -9033,7 +9150,7 @@ async function startServer() {
                 };
 
                 const targetWindow = window.opener || window.parent;
-                
+
                 let targetBox = null;
                 let coordinates = null;
                 const targetElementForMetrics = target || el;
@@ -9085,9 +9202,9 @@ async function startServer() {
                 fetch('/api/record-event', {
                   method: 'POST',
                   headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({ 
+                  body: JSON.stringify({
                     event: eventPayload,
-                    sessionId: currentSessionId 
+                    sessionId: currentSessionId
                   })
                 }).catch(() => {});
 
@@ -9104,7 +9221,7 @@ async function startServer() {
                 }
               };
               pingParent();
-              
+
               // Send initial navigate event
               setTimeout(() => {
                 sendEvent("navigate", null, { value: currentTargetUrl || getTargetUrl() });
@@ -9113,7 +9230,7 @@ async function startServer() {
               // Click & Double Click
               const handleInteraction = (e) => {
                 if (!e.target) return;
-                
+
                 // Ignore our own feedback outline
                 if (e.target.style && e.target.style.outline && e.target.style.outline.includes('10b981')) return;
 
@@ -9125,10 +9242,10 @@ async function startServer() {
                     if (rawHref && !rawHref.startsWith('javascript:') && !rawHref.startsWith('#') && !rawHref.startsWith('mailto:') && !rawHref.startsWith('tel:')) {
                       const absoluteUrl = resolveUrl(rawHref);
                       const targetAttr = link.getAttribute('target');
-                      
+
                       // Record click step on the link
                       sendEvent("click", link, { href: absoluteUrl });
-                      
+
                       // Do not cancel the target application's click or force a
                       // synthetic navigation. Cancelling capture-phase events
                       // broke SPA routers and form/link behaviour. HTML URL
@@ -9137,7 +9254,7 @@ async function startServer() {
                       return;
                     }
                   }
-                  
+
                   const target = e.target;
                   if (target.tagName === 'SELECT') return;
 
@@ -9162,7 +9279,7 @@ async function startServer() {
               document.addEventListener("mouseover", (e) => {
                 const target = e.target;
                 if (!target || target === document.body) return;
-                
+
                 const interactive = target.closest('button, a, input, select, textarea, [role="button"], [role="menuitem"]');
                 if (!interactive) return;
 
@@ -9176,7 +9293,7 @@ async function startServer() {
               const handleInput = (e) => {
                 const target = e.target;
                 if (!target || target.tagName === 'SELECT') return;
-                
+
                 // Track current value directly
                 target._lastSentValue = target.value;
                 sendEvent("fill", target, { value: target.value });
@@ -9245,8 +9362,8 @@ async function startServer() {
               window.addEventListener("scroll", (e) => {
                 clearTimeout(scrollTimeout);
                 scrollTimeout = setTimeout(() => {
-                  sendEvent("scroll", document.body, { 
-                    x: window.scrollX, 
+                  sendEvent("scroll", document.body, {
+                    x: window.scrollX,
                     y: window.scrollY,
                     value: "Scroll to " + window.scrollX + ", " + window.scrollY
                   });
@@ -9255,7 +9372,7 @@ async function startServer() {
 
               // Visibility (Tab Switch)
               document.addEventListener("visibilitychange", () => {
-                sendEvent("visibility", document.body, { 
+                sendEvent("visibility", document.body, {
                   state: document.visibilityState,
                   value: "Tab switched to " + document.visibilityState
                 });
@@ -9265,24 +9382,29 @@ async function startServer() {
               document.addEventListener("submit", (e) => {
                 const form = e.target;
                 if (!form) return;
-                
+
                 sendEvent("submit", form, { value: "Form submitted" });
-                
+
                 const action = form.getAttribute('action') || '';
                 const absoluteUrl = resolveUrl(action);
-                
+
                 if (action && !absoluteUrl.includes(window.location.origin)) {
                   form.setAttribute('action', proxyUrl(absoluteUrl));
                 }
               }, true);
 
-              // Navigation detection periodic check
+              // Navigation detection periodic check.
+              // Only the top document defines the page under test: ad and
+              // analytics iframes retarget themselves constantly, and recording
+              // those as navigations sends playback to an advertising frame.
+              const isSubFrame = window !== window.top;
               const checkUrl = () => {
+                if (isSubFrame) return;
                 const actualUrl = currentTargetUrl || getTargetUrl();
                 if (actualUrl && actualUrl !== lastUrl) {
                   lastUrl = actualUrl;
                   updateTargetUrl();
-                  sendEvent("navigate", document.body, { 
+                  sendEvent("navigate", document.body, {
                     value: actualUrl,
                     url: actualUrl
                   });
@@ -9298,7 +9420,7 @@ async function startServer() {
                 const actualUrl = currentTargetUrl || getTargetUrl();
                 if (actualUrl && actualUrl !== lastUrl) {
                   lastUrl = actualUrl;
-                  sendEvent("navigate", document.body, { 
+                  sendEvent("navigate", document.body, {
                     value: actualUrl,
                     url: actualUrl
                   });
@@ -9619,9 +9741,9 @@ ${html}`;
         try {
           var getVisibleText = function(el) { return (el.textContent || '').replace(/\\s+/g, ' ').trim(); };
 
-          var title = document.title || 
-                      (document.querySelector('meta[property="og:title"]') ? document.querySelector('meta[property="og:title"]').content : '') || 
-                      (document.querySelector('h1') ? getVisibleText(document.querySelector('h1')) : '') || 
+          var title = document.title ||
+                      (document.querySelector('meta[property="og:title"]') ? document.querySelector('meta[property="og:title"]').content : '') ||
+                      (document.querySelector('h1') ? getVisibleText(document.querySelector('h1')) : '') ||
                       window.location.hostname;
 
           // Headings
@@ -9890,6 +10012,8 @@ ${html}`;
             // single interactive proxied tab after this endpoint responds.
             headless: requestedLaunchMode === "proxy"
           });
+          const sessionVideoDir = import_path3.default.join(RECORDING_VIDEO_ROOT, sessionId);
+          import_fs4.default.mkdirSync(sessionVideoDir, { recursive: true });
           const context = await browser.newContext({
             userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
             viewport: { width: 1280, height: 800 },
@@ -9898,7 +10022,8 @@ ${html}`;
             isMobile: false,
             locale: "en-US",
             ignoreHTTPSErrors: true,
-            storageState: null
+            storageState: null,
+            recordVideo: { dir: sessionVideoDir, size: { width: 1280, height: 800 } }
           });
           await context.addInitScript(`(() => {
             try {
@@ -10437,18 +10562,18 @@ ${html}`;
           return void 0;
         });
       }
-      if (session.platform === "web" && req.headers.cookie) {
+      if (session.platform === "web" && session.mode === "proxy" && req.headers.cookie) {
         const targetOrigins = /* @__PURE__ */ new Set();
         [session.initialUrl, session.url, ...session.steps.flatMap((step) => [step.url, step.action === "navigate" ? step.value : ""])].filter(Boolean).forEach((candidate) => {
           try {
             targetOrigins.add(new URL(unwrapProxyUrl(candidate)).origin);
-          } catch (e) {
+          } catch (_) {
           }
         });
-        const ignoredCookie = /^(?:qa_last_target_origin|connect\.sid|io|__.*)$/i;
+        const ignoredCookie = /^(?:connect\.sid|automatiqa_|__vite|firebase|g_state)/i;
         const requestCookies = req.headers.cookie.split(";").map((pair) => {
           const separator = pair.indexOf("=");
-          if (separator <= 0) return null;
+          if (separator < 1) return null;
           const name = pair.slice(0, separator).trim();
           const value = pair.slice(separator + 1).trim();
           return !name || ignoredCookie.test(name) ? null : { name, value };
@@ -10469,9 +10594,38 @@ ${html}`;
           };
         }
       }
+      let videoUrl = null;
+      const pendingVideos = [];
+      if (session.context) {
+        for (const page of session.context.pages()) {
+          const video = page.video();
+          if (video) pendingVideos.push(video.path().catch(() => null));
+        }
+      }
       if (session.browser) {
         console.log(`Closing Playwright browser for session ${sessionId}`);
+        await session.context?.close().catch(() => {
+        });
         await session.browser.close().catch((err) => console.error("Failed to close browser:", err));
+      }
+      try {
+        const paths = (await Promise.all(pendingVideos)).filter(Boolean);
+        const primary = paths.find((p) => p && import_fs4.default.existsSync(p)) || (() => {
+          const dir = import_path3.default.join(RECORDING_VIDEO_ROOT, sessionId);
+          if (!import_fs4.default.existsSync(dir)) return "";
+          const files = import_fs4.default.readdirSync(dir).filter((f) => f.endsWith(".webm"));
+          return files.length ? import_path3.default.join(dir, files[0]) : "";
+        })();
+        if (primary && import_fs4.default.existsSync(primary)) {
+          const size = import_fs4.default.statSync(primary).size;
+          session.videoPath = primary;
+          videoUrl = `/api/recording-video/${sessionId}/${import_path3.default.basename(primary)}`;
+          console.log(`[Recording Video] Saved ${(size / 1024).toFixed(0)} KB for session ${sessionId} -> ${videoUrl}`);
+        } else {
+          console.warn(`[Recording Video] No video file was produced for session ${sessionId}.`);
+        }
+      } catch (videoErr) {
+        console.warn("[Recording Video] Could not finalise the session video:", videoErr);
       }
       wss.clients.forEach((client) => {
         if (client.readyState === import_ws.WebSocket.OPEN && client.activeSessionId === sessionId) {
@@ -10481,10 +10635,53 @@ ${html}`;
       const steps = session.steps;
       sessions.delete(sessionId);
       console.log(`Stopped recording session: ${sessionId}`);
-      res.json({ steps, webStorageState });
+      res.json({ steps, webStorageState, videoUrl });
     } else {
       console.warn(`Stop recording requested for non-existent session: ${sessionId}`);
       res.json({ steps: [], warning: "Session not found" });
+    }
+  });
+  app2.get("/api/recording-video/:sessionId/:file", (req, res) => {
+    try {
+      const { sessionId, file } = req.params;
+      if (!/^[A-Za-z0-9_-]+$/.test(sessionId) || !/^[A-Za-z0-9_@.-]+\.webm$/.test(file) || file.includes("..")) {
+        return res.status(400).json({ error: "Invalid video reference." });
+      }
+      const filePath = import_path3.default.join(RECORDING_VIDEO_ROOT, sessionId, file);
+      const resolved = import_path3.default.resolve(filePath);
+      if (!resolved.startsWith(import_path3.default.resolve(RECORDING_VIDEO_ROOT))) {
+        return res.status(400).json({ error: "Invalid video path." });
+      }
+      if (!import_fs4.default.existsSync(resolved)) {
+        return res.status(404).json({ error: "Recording video not found. It may have been cleared." });
+      }
+      const stat = import_fs4.default.statSync(resolved);
+      const range = req.headers.range;
+      if (range) {
+        const match = /bytes=(\d*)-(\d*)/.exec(range);
+        const start = match && match[1] ? parseInt(match[1], 10) : 0;
+        const end = match && match[2] ? parseInt(match[2], 10) : stat.size - 1;
+        if (start >= stat.size || end >= stat.size || start > end) {
+          res.writeHead(416, { "Content-Range": `bytes */${stat.size}` });
+          return res.end();
+        }
+        res.writeHead(206, {
+          "Content-Range": `bytes ${start}-${end}/${stat.size}`,
+          "Accept-Ranges": "bytes",
+          "Content-Length": end - start + 1,
+          "Content-Type": "video/webm"
+        });
+        return import_fs4.default.createReadStream(resolved, { start, end }).pipe(res);
+      }
+      res.writeHead(200, {
+        "Content-Length": stat.size,
+        "Content-Type": "video/webm",
+        "Accept-Ranges": "bytes"
+      });
+      return import_fs4.default.createReadStream(resolved).pipe(res);
+    } catch (err) {
+      console.error("[Recording Video] Serve error:", err);
+      return res.status(500).json({ error: err?.message || "Could not serve the recording video." });
     }
   });
   app2.post("/api/capture-step-screenshot", async (req, res) => {
@@ -10590,13 +10787,13 @@ ${html}`;
             </linearGradient>
           </defs>
           <rect width="1280" height="800" fill="url(#bodyGrad)"/>
-          
+
           <!-- Browser Chrome Header Bar -->
           <rect width="1280" height="52" fill="url(#chromeGrad)"/>
           <circle cx="28" cy="26" r="6" fill="#ef4444"/>
           <circle cx="48" cy="26" r="6" fill="#f59e0b"/>
           <circle cx="68" cy="26" r="6" fill="#10b981"/>
-          
+
           <rect x="110" y="10" width="760" height="32" rx="8" fill="#090d16" stroke="#334155" stroke-width="1"/>
           <text x="130" y="31" fill="#38bdf8" font-family="monospace" font-size="12" font-weight="bold">\u{1F512} ${escapeXml(cleanUrl)}</text>
           <text x="1150" y="31" fill="#64748b" font-family="sans-serif" font-size="11">\u25CF LIVE STEP</text>
@@ -10605,28 +10802,28 @@ ${html}`;
           <rect x="40" y="76" width="1200" height="64" rx="12" fill="#1e293b" stroke="#334155" stroke-width="1"/>
           <rect x="56" y="92" width="76" height="32" rx="6" fill="#10b981"/>
           <text x="94" y="113" fill="#ffffff" font-family="sans-serif" font-size="12" font-weight="900" text-anchor="middle">${escapeXml(action.toUpperCase())}</text>
-          
+
           <text x="148" y="112" fill="#f8fafc" font-family="sans-serif" font-size="15" font-weight="bold">${escapeXml(targetLabel)}</text>
           <text x="148" y="128" fill="#94a3b8" font-family="monospace" font-size="11">Locator: ${escapeXml(locatorText.slice(0, 75))}</text>
-          
+
           <!-- Simulated Application Interface -->
           <rect x="40" y="156" width="1200" height="604" rx="14" fill="#0f172a" stroke="#1e293b" stroke-width="2"/>
-          
+
           <!-- App Header -->
           <rect x="64" y="180" width="1152" height="60" rx="8" fill="#1e293b"/>
           <text x="88" y="217" fill="#38bdf8" font-family="sans-serif" font-size="18" font-weight="900">APPLICATION TEST RUNNER</text>
           <text x="1120" y="216" fill="#94a3b8" font-family="sans-serif" font-size="12">Step #${stepId ? escapeXml(String(stepId).slice(0, 8)) : "1"}</text>
-          
+
           <!-- Active Target Element Box (Highlighted) -->
           <rect x="120" y="290" width="480" height="64" rx="10" fill="#1e293b" stroke="#10b981" stroke-width="3"/>
           <text x="144" y="324" fill="#10b981" font-family="sans-serif" font-size="15" font-weight="bold">\u{1F3AF} Target: ${escapeXml(targetLabel)}</text>
           <text x="144" y="342" fill="#64748b" font-family="monospace" font-size="11">Action: ${escapeXml(action)} executed on this element</text>
-          
+
           <!-- Additional UI Content Placeholders -->
           <rect x="120" y="380" width="1040" height="120" rx="10" fill="#1e293b" opacity="0.6" stroke="#334155" stroke-width="1"/>
           <rect x="120" y="520" width="500" height="180" rx="10" fill="#1e293b" opacity="0.6" stroke="#334155" stroke-width="1"/>
           <rect x="660" y="520" width="500" height="180" rx="10" fill="#1e293b" opacity="0.6" stroke="#334155" stroke-width="1"/>
-          
+
           <!-- Timestamp & Status -->
           <text x="1120" y="740" fill="#64748b" font-family="sans-serif" font-size="11" text-anchor="end">Captured at: ${(/* @__PURE__ */ new Date()).toLocaleTimeString()}</text>
         </svg>`;
@@ -11069,9 +11266,21 @@ ${html}`;
               const isRadioOrCheckbox = await loc.evaluate((el) => {
                 return el.tagName === "INPUT" && (el.type === "radio" || el.type === "checkbox");
               }).catch(() => false);
+              const urlBeforeClick = page.url();
+              const clickNavigated = async () => {
+                if (page.isClosed()) return true;
+                if (page.url() !== urlBeforeClick) return true;
+                try {
+                  await page.waitForURL((u) => u.toString() !== urlBeforeClick, { timeout: 2500 });
+                  return true;
+                } catch (e) {
+                  return page.url() !== urlBeforeClick;
+                }
+              };
               if (isRadioOrCheckbox) {
                 await loc.check({ timeout: 2e3 }).catch(async () => {
-                  await loc.click({ force: true, timeout: 1500 });
+                  await loc.click({ force: true, timeout: 1500 }).catch(() => {
+                  });
                 });
                 await loc.evaluate((el) => {
                   if ("checked" in el) el.checked = true;
@@ -11081,17 +11290,33 @@ ${html}`;
                 }).catch(() => {
                 });
               } else if (action === "dblclick") {
-                await loc.dblclick({ timeout: 2500 }).catch(async () => {
-                  await loc.dblclick({ force: true, timeout: 1500 });
+                let ok = true;
+                await loc.dblclick({ timeout: 2500, noWaitAfter: true }).catch(async () => {
+                  await loc.dblclick({ force: true, timeout: 1500, noWaitAfter: true }).catch(() => {
+                    ok = false;
+                  });
                 });
+                if (!ok && !await clickNavigated()) {
+                  return { success: false, error: `Double click on "${elementName || rawSelector}" did not take effect.` };
+                }
               } else {
-                let clickOptions = { timeout: 2500 };
+                let clickOptions = { timeout: 2500, noWaitAfter: true };
                 if (typeof step.offsetX === "number" && typeof step.offsetY === "number" && step.offsetX > 0 && step.offsetY > 0) {
                   clickOptions.position = { x: Math.round(step.offsetX), y: Math.round(step.offsetY) };
                 }
+                let ok = true;
                 await loc.click(clickOptions).catch(async () => {
-                  await loc.click({ force: true, timeout: 1500 });
+                  await loc.click({ force: true, timeout: 1500, noWaitAfter: true }).catch(() => {
+                    ok = false;
+                  });
                 });
+                if (!ok) {
+                  if (await clickNavigated()) {
+                    console.log(`[PLAYBACK] Click on "${elementName || rawSelector}" started a navigation; treating it as performed.`);
+                  } else {
+                    return { success: false, error: `Click on "${elementName || rawSelector}" did not take effect.` };
+                  }
+                }
               }
               await ensurePageFullyReady(page, 5e3);
               return {
@@ -11297,34 +11522,84 @@ ${html}`;
       return domResult;
     }
     if (step.coordinates || step.targetBox || typeof step.x === "number" && typeof step.y === "number") {
-      const vp = page.viewportSize() || { width: 1280, height: 720 };
-      const cxPct = step.coordinates?.x ?? step.x ?? (step.targetBox ? step.targetBox.x + step.targetBox.width / 2 : 50);
-      const cyPct = step.coordinates?.y ?? step.y ?? (step.targetBox ? step.targetBox.y + step.targetBox.height / 2 : 50);
-      const px = Math.round(cxPct / 100 * vp.width);
-      const py = Math.round(cyPct / 100 * vp.height);
-      if (px > 0 && py > 0) {
-        console.log(`[Playback Engine] Interacting via coordinate click/type fallback at (${px}px, ${py}px) [${cxPct}%, ${cyPct}%]`);
-        await page.mouse.click(px, py).catch(() => {
-        });
-        await page.waitForTimeout(150);
-        if (action === "fill" || action === "type") {
-          const valToEnter = valueToFill !== void 0 ? String(valueToFill) : "";
-          try {
-            await page.keyboard.press("Control+A").catch(() => {
+      const recordedStepUrl = typeof step.url === "string" ? step.url : "";
+      const livePageUrl = page.url();
+      let sameRecordedPage = true;
+      if (recordedStepUrl && /^https?:\/\//i.test(recordedStepUrl)) {
+        try {
+          const a = new URL(livePageUrl);
+          const b = new URL(recordedStepUrl);
+          const pa = a.pathname.replace(/\/+$/, "") || "/";
+          const pb = b.pathname.replace(/\/+$/, "") || "/";
+          sameRecordedPage = a.origin === b.origin && (pa === pb || pa.endsWith(pb) || pb.endsWith(pa));
+        } catch (e) {
+          sameRecordedPage = true;
+        }
+      }
+      if (!sameRecordedPage) {
+        console.warn(`[PLAYBACK] Skipping coordinate fallback for "${elementName || rawSelector}": the browser is on "${livePageUrl}" but the coordinates were recorded on "${recordedStepUrl}".`);
+      } else {
+        const vp = page.viewportSize() || { width: 1280, height: 720 };
+        const cxPct = step.coordinates?.x ?? step.x ?? (step.targetBox ? step.targetBox.x + step.targetBox.width / 2 : 50);
+        const cyPct = step.coordinates?.y ?? step.y ?? (step.targetBox ? step.targetBox.y + step.targetBox.height / 2 : 50);
+        const px = Math.round(cxPct / 100 * vp.width);
+        const py = Math.round(cyPct / 100 * vp.height);
+        if (px > 0 && py > 0) {
+          const hitTarget = await page.evaluate(({ x, y }) => {
+            const el = document.elementFromPoint(x, y);
+            if (!el) return null;
+            const tag = (el.tagName || "").toUpperCase();
+            if (tag === "HTML" || tag === "BODY") return null;
+            return {
+              tag,
+              editable: tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || !!el.isContentEditable
+            };
+          }, { x: px, y: py }).catch(() => null);
+          if (!hitTarget) {
+            console.warn(`[PLAYBACK] Skipping coordinate fallback for "${elementName || rawSelector}": nothing interactive at (${px}px, ${py}px) on ${livePageUrl}.`);
+          } else {
+            console.log(`[Playback Engine] Interacting via coordinate click/type fallback at (${px}px, ${py}px) [${cxPct}%, ${cyPct}%] on <${hitTarget.tag}>`);
+            await page.mouse.click(px, py).catch(() => {
             });
-            await page.keyboard.press("Backspace").catch(() => {
-            });
-            await page.keyboard.type(valToEnter, { delay: 30 }).catch(() => {
-            });
-          } catch (e) {
+            await page.waitForTimeout(150);
+            if (action === "fill" || action === "type") {
+              const valToEnter = valueToFill !== void 0 ? String(valueToFill) : "";
+              if (!hitTarget.editable) {
+                console.warn(`[PLAYBACK] Coordinate fallback cannot type into <${hitTarget.tag}> for "${elementName || rawSelector}".`);
+                return {
+                  success: false,
+                  error: `Target field "${elementName || rawSelector || "recorded action"}" was not found; the recorded position holds a <${hitTarget.tag}>, not an input.`
+                };
+              }
+              try {
+                await page.keyboard.press("Control+A").catch(() => {
+                });
+                await page.keyboard.press("Backspace").catch(() => {
+                });
+                await page.keyboard.type(valToEnter, { delay: 30 }).catch(() => {
+                });
+              } catch (e) {
+              }
+              const typed = await page.evaluate(() => {
+                const el = document.activeElement;
+                if (!el) return "";
+                return typeof el.value === "string" ? el.value : el.textContent || "";
+              }).catch(() => "");
+              if (valToEnter && !String(typed).includes(valToEnter)) {
+                return {
+                  success: false,
+                  error: `Typing "${valToEnter}" into "${elementName || rawSelector}" did not take effect at the recorded position.`
+                };
+              }
+            }
+            await page.waitForTimeout(250);
+            return {
+              success: true,
+              coordinates: { x: cxPct, y: cyPct },
+              targetBox: step.targetBox || { x: cxPct - 8, y: cyPct - 3, width: 16, height: 6 }
+            };
           }
         }
-        await page.waitForTimeout(250);
-        return {
-          success: true,
-          coordinates: { x: cxPct, y: cyPct },
-          targetBox: step.targetBox || { x: cxPct - 8, y: cyPct - 3, width: 16, height: 6 }
-        };
       }
     }
     console.warn(`[Playback Engine] Element "${elementName || rawSelector}" could not be located after readiness wait.`);
@@ -11417,20 +11692,87 @@ ${html}`;
         ignoreHTTPSErrors: true,
         ...playbackStorageState && Array.isArray(playbackStorageState.cookies) && Array.isArray(playbackStorageState.origins) ? { storageState: playbackStorageState } : {}
       });
-      const page = await context.newPage();
-      page.setDefaultTimeout(12e3);
+      const firstPage = await context.newPage();
+      firstPage.setDefaultTimeout(12e3);
       const redirectLog = [];
-      page.on("response", (response) => {
-        const status = response.status();
-        if (status >= 300 && status < 400) {
-          const loc = response.headers()["location"];
-          if (loc) {
-            redirectLog.push(`${response.url()} \u2794 ${loc}`);
-            console.log(`[Playback Engine] Redirect: ${response.url()} -> ${loc}`);
+      let activePage = firstPage;
+      const attachPageListeners = (p) => {
+        p.on("response", (response) => {
+          const status = response.status();
+          if (status >= 300 && status < 400) {
+            const loc = response.headers()["location"];
+            if (loc) {
+              redirectLog.push(`${response.url()} \u2794 ${loc}`);
+              console.log(`[PLAYBACK] Redirect: ${response.url()} -> ${loc}`);
+            }
           }
+        });
+        p.on("framenavigated", (frame) => {
+          if (frame === p.mainFrame() && p === activePage) {
+            console.log(`[PLAYBACK] Navigation detected -> ${frame.url()}`);
+          }
+        });
+      };
+      attachPageListeners(firstPage);
+      context.on("page", async (newPage) => {
+        attachPageListeners(newPage);
+        newPage.setDefaultTimeout(12e3);
+        try {
+          await newPage.waitForLoadState("domcontentloaded", { timeout: 8e3 });
+        } catch (e) {
+        }
+        if (!newPage.isClosed()) {
+          console.log(`[PLAYBACK] New tab/window adopted as the active page: ${newPage.url()}`);
+          activePage = newPage;
         }
       });
+      const getActivePage = () => {
+        if (activePage && !activePage.isClosed()) return activePage;
+        const open = context.pages().filter((p) => !p.isClosed());
+        activePage = open.length ? open[open.length - 1] : firstPage;
+        return activePage;
+      };
+      const isSamePageContext = (a, b) => {
+        try {
+          const ua = new URL(a);
+          const ub = new URL(b);
+          if (ua.origin !== ub.origin) return false;
+          const pa = ua.pathname.replace(/\/+$/, "") || "/";
+          const pb = ub.pathname.replace(/\/+$/, "") || "/";
+          return pa === pb || pa.endsWith(pb) || pb.endsWith(pa);
+        } catch (e) {
+          return false;
+        }
+      };
+      const waitForRecordedPage = async (p, expectedUrl, timeoutMs) => {
+        if (isSamePageContext(p.url(), expectedUrl)) return true;
+        console.log(`[PLAYBACK] Waiting for page state... expected "${expectedUrl}", currently "${p.url()}"`);
+        try {
+          await p.waitForURL((u) => isSamePageContext(u.toString(), expectedUrl), { timeout: timeoutMs });
+          await ensurePageFullyReady(p, 8e3);
+          console.log(`[PLAYBACK] Reached expected page: ${p.url()}`);
+          return true;
+        } catch (e) {
+          return isSamePageContext(p.url(), expectedUrl);
+        }
+      };
       const results = [];
+      const originOf = (u) => {
+        try {
+          return u ? new URL(u).origin : "";
+        } catch (e) {
+          return "";
+        }
+      };
+      const originIsInteractedWith = (origin, fromIndex) => {
+        if (!origin) return false;
+        for (let j = fromIndex; j < steps.length; j++) {
+          const s = steps[j];
+          if (!s || s.skipped || s.action === "navigate") continue;
+          if (originOf(resolveFullStepUrl(s.url, "") || s.url) === origin) return true;
+        }
+        return false;
+      };
       const resolveFullStepUrl = (rawStepUrl, base = "") => {
         if (!rawStepUrl || typeof rawStepUrl !== "string") return null;
         let clean = unwrapProxyUrl(rawStepUrl).trim();
@@ -11488,6 +11830,7 @@ ${html}`;
       }
       let currentUrl = requestedInitialUrl;
       const safeNavigatePage = async (targetNav) => {
+        const page = getActivePage();
         if (!targetNav) return page.url() || currentUrl;
         if (isMobileAppTarget(targetNav)) throw new Error("Web playback cannot substitute a mobile mock target.");
         let cleanNav = unwrapProxyUrl(targetNav).trim();
@@ -11548,11 +11891,14 @@ ${html}`;
         );
       };
       sendEvent("session_ready", {
-        initialUrl: page.url() || currentUrl,
-        pageTitle: await page.title().catch(() => "")
+        initialUrl: getActivePage().url() || currentUrl,
+        pageTitle: await getActivePage().title().catch(() => "")
       });
+      const MAX_CONSECUTIVE_FAILURES = 3;
+      let consecutiveFailures = 0;
       for (let i = 0; i < steps.length; i++) {
         const step = steps[i];
+        let page = getActivePage();
         if (step.skipped) {
           const skippedRes = {
             stepId: step.id,
@@ -11581,17 +11927,57 @@ ${html}`;
           const value = step.value;
           const elementName = step.elementName || "";
           const urlBeforeAction = page.url();
-          console.log(`[Playback Engine] Step ${i + 1}/${steps.length}: [${action.toUpperCase()}] Selector: "${selector}" Value: "${value}" Screen/URL: "${step.url || step.screen || ""}"`);
+          console.log(`[PLAYBACK] Step ${i + 1}/${steps.length}
+  Action: ${action}
+  Element: ${elementName || selector || "(none)"}
+  Current URL: ${page.url()}
+  Recorded URL: ${step.url || step.screen || "(none)"}`);
           await ensurePageFullyReady(page, 1e4);
           if (visualOnlyAuthStep) {
             console.log(`[Playback Engine] Visual-only recorded authentication step ${i + 1}: ${action}`);
           } else if (action === "navigate") {
             const targetNav = resolveCandidateNavUrl(step, currentUrl) || resolveFullStepUrl(step.url, currentUrl) || resolveFullStepUrl(value, currentUrl) || step.url || value || currentUrl;
-            if (targetNav) {
-              currentUrl = await safeNavigatePage(targetNav);
+            const navOrigin = originOf(targetNav);
+            const currentOrigin = originOf(page.url());
+            if (navOrigin && currentOrigin && navOrigin !== currentOrigin && navOrigin !== originOf(requestedInitialUrl) && !originIsInteractedWith(navOrigin, i + 1)) {
+              console.log(`[PLAYBACK] Ignoring navigation to "${targetNav}": no recorded step interacts with ${navOrigin}, so it is a third-party frame, not a page visit.`);
+              currentUrl = page.url();
+            } else if (targetNav) {
+              const reachedOnItsOwn = /^https?:\/\//i.test(targetNav) ? await waitForRecordedPage(page, targetNav, 8e3) : false;
+              if (reachedOnItsOwn) {
+                console.log(`[PLAYBACK] Application navigated here by itself, no reload needed: ${page.url()}`);
+                currentUrl = page.url();
+              } else {
+                currentUrl = await safeNavigatePage(targetNav);
+              }
             }
           } else if (["click", "dblclick", "fill", "type", "select", "selectOption", "check", "uncheck", "hover", "focus", "clear", "scroll"].includes(action)) {
+            const stepRecordedUrl = resolveFullStepUrl(step.url, currentUrl) || resolveCandidateNavUrl(step, currentUrl);
+            if (stepRecordedUrl && /^https?:\/\//i.test(stepRecordedUrl)) {
+              const currentP = page.url() || "";
+              try {
+                const parsedCurrent = new URL(currentP);
+                const parsedRecorded = new URL(stepRecordedUrl);
+                const isDifferentPage = parsedCurrent.origin !== parsedRecorded.origin || parsedCurrent.pathname !== parsedRecorded.pathname && !parsedCurrent.pathname.endsWith(parsedRecorded.pathname) && !parsedRecorded.pathname.endsWith(parsedCurrent.pathname);
+                if (isDifferentPage) {
+                  console.log(`[Playback Engine] Multi-page sync: Navigating to step recorded page: ${stepRecordedUrl}`);
+                  currentUrl = await safeNavigatePage(stepRecordedUrl);
+                }
+              } catch (e) {
+              }
+            }
             let res2 = await findAndInteractElement(page, step, action, value);
+            if (!res2.success && step.url) {
+              const fallbackUrl = resolveFullStepUrl(step.url, currentUrl);
+              if (fallbackUrl && /^https?:\/\//i.test(fallbackUrl) && fallbackUrl !== page.url()) {
+                console.log(`[Playback Engine] Element interaction retry: Synchronizing page to recorded URL: ${fallbackUrl}`);
+                try {
+                  currentUrl = await safeNavigatePage(fallbackUrl);
+                  res2 = await findAndInteractElement(page, step, action, value);
+                } catch (syncErr) {
+                }
+              }
+            }
             stepInteractRes = res2;
             if (!res2.success) {
               stepPassed = false;
@@ -11625,9 +12011,24 @@ ${html}`;
             }
           }
           if (["click", "dblclick", "submit", "press"].includes(action)) {
-            await page.waitForURL((url) => url.toString() !== urlBeforeAction, { timeout: 4e3 }).catch(() => {
-            });
+            const nextStep = steps.slice(i + 1).find((s) => s && !s.skipped);
+            const expectedNextUrl = nextStep ? resolveFullStepUrl(nextStep.url, currentUrl) || resolveCandidateNavUrl(nextStep, currentUrl) : null;
+            if (expectedNextUrl && /^https?:\/\//i.test(expectedNextUrl) && !isSamePageContext(urlBeforeAction, expectedNextUrl)) {
+              const reached = await waitForRecordedPage(page, expectedNextUrl, 15e3);
+              if (!reached) {
+                console.log(`[PLAYBACK] Expected "${expectedNextUrl}" after ${action}, currently "${page.url()}". Continuing; the next step will re-check.`);
+              }
+            } else {
+              await page.waitForURL((url) => url.toString() !== urlBeforeAction, { timeout: 4e3 }).catch(() => {
+              });
+            }
+            page = getActivePage();
             await ensurePageFullyReady(page, 8e3);
+            if (page.url() !== urlBeforeAction) {
+              console.log(`[PLAYBACK] Navigation detected
+  Previous URL: ${urlBeforeAction}
+  Current URL: ${page.url()}`);
+            }
           }
           if (action === "navigate") {
             const expectedUrl = resolveCandidateNavUrl(step, urlBeforeAction) || resolveFullStepUrl(value, urlBeforeAction);
@@ -11646,16 +12047,7 @@ ${html}`;
           stepPassed = false;
           stepError = stepException.message || "Step execution error.";
         }
-        if (!stepPassed && step.screenshot && isAuthenticationUrl(page.url())) {
-          const evidenceUrl = resolveFullStepUrl(step.url, currentUrl) || resolveCandidateNavUrl(step, currentUrl);
-          if (evidenceUrl && !isAuthenticationUrl(evidenceUrl)) {
-            visualFallback = true;
-            stepPassed = true;
-            stepError = "Live authenticated session expired; showing recorded performed-step evidence.";
-          }
-        }
-        const evidenceResultUrl = resolveCandidateNavUrl(step, currentUrl) || resolveFullStepUrl(step.url, currentUrl);
-        const resultingUrl = visualFallback && evidenceResultUrl ? evidenceResultUrl : page.url() || currentUrl;
+        const resultingUrl = page.url() || currentUrl;
         currentUrl = resultingUrl;
         const pageTitle = await page.title().catch(() => "");
         let screenshotBase64 = "";
@@ -11691,9 +12083,28 @@ ${html}`;
         results.push(resultItem);
         sendEvent("step_result", { result: resultItem });
         if (!stepPassed) {
-          console.log(`[Playback Engine] Stopping playback after step ${i + 1} due to error: ${stepError}`);
-          break;
+          consecutiveFailures++;
+          const nextStep = steps.slice(i + 1).find((s) => s && !s.skipped);
+          const nextExpectedUrl = nextStep ? resolveFullStepUrl(nextStep.url, currentUrl) || resolveCandidateNavUrl(nextStep, currentUrl) : null;
+          const nextStepStillReachable = !nextStep || !nextExpectedUrl || !/^https?:\/\//i.test(nextExpectedUrl) || isSamePageContext(page.url(), nextExpectedUrl);
+          if (!nextStep) {
+            console.log(`[PLAYBACK] Step ${i + 1} failed: ${stepError}`);
+            break;
+          }
+          if (!nextStepStillReachable) {
+            console.log(`[PLAYBACK] Stopping after step ${i + 1}: ${stepError}
+  The flow expected "${nextExpectedUrl}" next but the browser is on "${page.url()}", so the remaining steps would run on the wrong page.`);
+            break;
+          }
+          if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
+            console.log(`[PLAYBACK] Stopping after step ${i + 1}: ${MAX_CONSECUTIVE_FAILURES} steps failed in a row, so the page is no longer what the recording expects.`);
+            break;
+          }
+          console.log(`[PLAYBACK] Step ${i + 1} failed: ${stepError}
+  Still on the page the next step expects (${page.url()}), continuing so the whole run is reported.`);
+          continue;
         }
+        consecutiveFailures = 0;
       }
       if (slackConfig && slackConfig.enabled && (slackConfig.webhookUrl || slackConfig.botToken)) {
         try {
@@ -14448,7 +14859,7 @@ ${file.patch}
     const initialLetter = title.charAt(0).toUpperCase();
     const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1080 2400" width="1080" height="2400">
       <rect width="1080" height="2400" fill="#0b1329" />
-      
+
       <!-- Status Bar -->
       <rect width="1080" height="80" fill="#030712" />
       <text x="60" y="52" fill="#94a3b8" font-family="sans-serif" font-size="32" font-weight="bold">09:41</text>
@@ -14465,7 +14876,7 @@ ${file.patch}
 
       <!-- App Content Body Card -->
       <rect x="40" y="290" width="1000" height="1940" rx="36" fill="#111827" stroke="#1f2937" stroke-width="4" />
-      
+
       <!-- App Banner Section -->
       <rect x="90" y="340" width="900" height="380" rx="28" fill="#1e293b" stroke="#0284c7" stroke-width="3" />
       <circle cx="540" cy="480" r="75" fill="#0284c7" />
@@ -14795,6 +15206,21 @@ pause
       }
     }
     res.json({ success: true });
+  });
+  const deviceHierarchyCache = /* @__PURE__ */ new Map();
+  app2.post(["/api/device-agent/upload-hierarchy", "/api/mobile/agent/upload-hierarchy"], (req, res) => {
+    const { email, xml, deviceId, packageName } = req.body;
+    const userEmail = (email || "sowbarnya@qaoncloud.com").toLowerCase();
+    if (typeof xml !== "string" || !xml.includes("<hierarchy")) {
+      return res.status(400).json({ success: false, error: "A UIAutomator <hierarchy> XML document is required." });
+    }
+    const entry = { xml, capturedAt: Date.now(), deviceId, packageName };
+    deviceHierarchyCache.set(userEmail, entry);
+    const session = activeMobileSessions.get(userEmail);
+    if (session) {
+      session.pageSourceXml = xml;
+    }
+    res.json({ success: true, capturedAt: entry.capturedAt });
   });
   const deviceLogsBuffer = /* @__PURE__ */ new Map();
   app2.post(["/api/device-agent/upload-logs", "/api/mobile/agent/upload-logs"], (req, res) => {
@@ -15342,27 +15768,19 @@ pause
         error: "Android execution agent is offline. Start the AutomatiQA Mobile Execution Agent."
       });
     }
-    if (session && session.pageSourceXml) {
-      return res.json({
-        success: true,
-        xml: session.pageSourceXml
+    const cached = deviceHierarchyCache.get(email);
+    const xml = cached?.xml || session?.pageSourceXml;
+    if (!xml) {
+      return res.status(503).json({
+        success: false,
+        error: "No UI hierarchy has been captured from the device yet. Make sure the app under test is in the foreground and retry in a moment."
       });
     }
-    const pkg = session?.packageName || "com.uploaded.application";
-    const dynamicXml = `<hierarchy rotation="0">
-  <android.widget.FrameLayout bounds="[0,0][1080,2400]">
-    <android.widget.LinearLayout bounds="[0,80][1080,2320]">
-      <android.widget.TextView resource-id="${pkg}:id/title_text" text="Welcome to Mobile Application" bounds="[90,340][990,720]" clickable="false" enabled="true"/>
-      <android.widget.EditText resource-id="${pkg}:id/input_user" content-desc="input_user" text="user@domain.com" bounds="[90,810][990,930]" clickable="true" enabled="true"/>
-      <android.widget.EditText resource-id="${pkg}:id/input_password" content-desc="input_password" text="" bounds="[90,1020][990,1140]" clickable="true" enabled="true"/>
-      <android.widget.Button resource-id="${pkg}:id/btn_login" content-desc="btn_login" text="SIGN IN / GET STARTED" bounds="[90,1190][990,1320]" clickable="true" enabled="true"/>
-      <android.widget.Button resource-id="${pkg}:id/btn_explore" content-desc="btn_explore" text="EXPLORE COURTS &amp; ARENA" bounds="[90,1350][990,1480]" clickable="true" enabled="true"/>
-    </android.widget.LinearLayout>
-  </android.widget.FrameLayout>
-</hierarchy>`;
     res.json({
       success: true,
-      xml: dynamicXml
+      xml,
+      capturedAt: cached?.capturedAt,
+      stale: cached ? Date.now() - cached.capturedAt > 5e3 : void 0
     });
   });
   app2.post("/api/mobile/app/action", (req, res) => {

@@ -133,6 +133,9 @@ interface MobileRecordingInspectorProps {
     extraMetrics?: {
       targetBox?: { x: number; y: number; width: number; height: number };
       coordinates?: { x: number; y: number };
+      /** Upgrade an already-captured step to its resolved UI node without
+       *  gesturing on the device again. */
+      recordOnly?: boolean;
     }
   ) => void;
   onAddCustomAssertion: () => void;
@@ -4358,6 +4361,15 @@ export const MobileRecordingInspector: React.FC<MobileRecordingInspectorProps> =
         enabled: node.getAttribute('enabled') !== 'false'
       };
       setSelectedElement(inspectedElem);
+
+      // Re-record the same interaction with the real node. The recorder replaces
+      // the coordinate placeholder in place, so the step ends up referencing an
+      // element that exists in the app's UI hierarchy rather than a screen
+      // position that breaks on any other device size.
+      onRecordElement(inspectedElem, action, inspectorMode === 'type' ? inspectorInputText : undefined, undefined, {
+        ...coordinateMetrics,
+        recordOnly: true
+      });
     } catch (error: any) {
       console.warn('Recording live tap with coordinate fallback:', error?.message || error);
     }
