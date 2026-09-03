@@ -1126,6 +1126,10 @@ async function startServer() {
         const testId = el.getAttribute('data-testid') || el.getAttribute('data-test') || el.getAttribute('data-cy');
         if (testId) return '[data-testid="' + testId + '"]';
 
+        const stableClass = Array.from(el.classList || []).find((className: any) =>
+          /^[a-zA-Z][\w-]*$/.test(className) && !/^(active|selected|hover|focus|disabled|ng-|css-|sc-)/i.test(className) && document.querySelectorAll('.' + className).length === 1);
+        if (stableClass) return '.' + stableClass;
+
         const name = el.getAttribute('name');
         if (name) {
           if (el.tagName === 'INPUT' && el.type === 'radio') {
@@ -1165,7 +1169,7 @@ async function startServer() {
         const alternatives: any[] = [];
         let primary: any = null;
 
-        // 1. Visible Text - getByText()
+        // Candidates are collected first, then deterministically validated and ranked.
         const visibleText = (el.innerText || el.textContent || '').trim();
         if (visibleText && visibleText.length > 0 && visibleText.length < 60) {
           alternatives.push({
@@ -1182,7 +1186,7 @@ async function startServer() {
         if (role && accName) {
           alternatives.push({
             type: 'role',
-            value: '[role="' + role + '"][name="' + accName + '"]',
+            value: role + '[name="' + accName + '"]',
             playwright: `page.getByRole('${role}', { name: '${accName.replace(/'/g, "\\'")}' })`
           });
           if (!primary) primary = alternatives[alternatives.length - 1];
@@ -1193,7 +1197,7 @@ async function startServer() {
         if (placeholder) {
           alternatives.push({
             type: 'placeholder',
-            value: '[placeholder="' + placeholder + '"]',
+            value: placeholder,
             playwright: `page.getByPlaceholder('${placeholder.replace(/'/g, "\\'")}')`
           });
           if (!primary) primary = alternatives[alternatives.length - 1];
@@ -1205,20 +1209,20 @@ async function startServer() {
           const labelText = (labelEl as HTMLElement).innerText.trim();
           alternatives.push({
             type: 'label',
-            value: 'label:has-text("' + labelText.substring(0, 30) + '")',
+            value: labelText,
             playwright: `page.getByLabel('${labelText.replace(/'/g, "\\'")}')`
           });
           if (!primary) primary = alternatives[alternatives.length - 1];
         }
 
         // 5. Data Test IDs - getByTestId()
-        const testId = el.getAttribute('data-testid') || el.getAttribute('data-test') || el.getAttribute('data-cy');
+        const testAttr = el.hasAttribute('data-testid') ? 'data-testid' : el.hasAttribute('data-test') ? 'data-test' : el.hasAttribute('test-id') ? 'test-id' : el.hasAttribute('data-cy') ? 'data-test' : '';
+        const testId = testAttr ? (el.getAttribute(testAttr === 'data-test' && el.hasAttribute('data-cy') ? 'data-cy' : testAttr) || '') : '';
         if (testId) {
-          const testIdSel = '[data-testid="' + testId + '"]';
           alternatives.push({
-            type: 'testId',
-            value: testIdSel,
-            playwright: 'page.getByTestId("' + testId + '")'
+            type: testAttr,
+            value: testId,
+            playwright: testAttr === 'data-testid' ? 'page.getByTestId("' + testId + '")' : `page.locator('[${testAttr === 'data-test' && el.hasAttribute('data-cy') ? 'data-cy' : testAttr}="${testId}"]')`
           });
           if (!primary) primary = alternatives[alternatives.length - 1];
         }
@@ -1228,7 +1232,7 @@ async function startServer() {
         if (nameAttr) {
           alternatives.push({
             type: 'name',
-            value: `[name="${nameAttr}"]`,
+            value: nameAttr,
             playwright: `page.locator('[name="${nameAttr}"]')`
           });
           if (!primary) primary = alternatives[alternatives.length - 1];
@@ -1263,7 +1267,42 @@ async function startServer() {
           if (!primary) primary = alternatives[alternatives.length - 1];
         }
 
-        // Wrap in action code
+        const priority: any = { 'data-testid': 1, 'data-test': 1, 'test-id': 1, id: 2, name: 3, 'aria-label': 4, label: 4, role: 5, placeholder: 6, css: 9, xpath: 10, text: 11 };
+        const resolveCandidate = (candidate: any): any[] => {
+          try {
+            if (candidate.type === 'text') return Array.from(document.querySelectorAll('*')).filter((node: any) => node.children.length === 0 && (node.textContent || '').trim() === candidate.value);
+            if (candidate.type === 'role') {
+              const match = candidate.value.match(/^([^[]+)\[name="([\s\S]*)"\]$/);
+              if (!match) return [];
+              const roleName = match[1], accessibleName = match[2];
+              const selector = roleName === 'button' ? 'button,[role="button"]' : roleName === 'link' ? 'a,[role="link"]' : roleName === 'textbox' ? 'input,textarea,[role="textbox"]' : roleName === 'combobox' ? 'select,[role="combobox"]' : `[role="${roleName}"]`;
+              return Array.from(document.querySelectorAll(selector)).filter((node: any) => (node.getAttribute('aria-label') || node.innerText || node.getAttribute('placeholder') || node.getAttribute('value') || '').trim().substring(0, 40) === accessibleName);
+            }
+            if (candidate.type === 'placeholder') return Array.from(document.querySelectorAll('[placeholder]')).filter((node: any) => node.getAttribute('placeholder') === placeholder);
+            if (candidate.type === 'name') return Array.from(document.querySelectorAll('[name]')).filter((node: any) => node.getAttribute('name') === candidate.value);
+            if (candidate.type === 'label') {
+              const labels = Array.from(document.querySelectorAll('label')).filter((node: any) => (node.innerText || '').trim() === candidate.value);
+              return labels.map((node: any) => node.htmlFor ? document.getElementById(node.htmlFor) : node.querySelector('input,textarea,select')).filter(Boolean);
+            }
+            if (candidate.type === 'xpath') {
+              const snapshot = document.evaluate(candidate.value, document, null, XPathResult.ORDERED_NODE_SNAPSHOT_TYPE, null);
+              return Array.from({ length: snapshot.snapshotLength }, (_, index) => snapshot.snapshotItem(index));
+            }
+            if (['data-testid', 'data-test', 'test-id'].includes(candidate.type)) return Array.from(document.querySelectorAll('[data-testid],[data-test],[data-cy],[test-id]')).filter((node: any) => node.getAttribute('data-testid') === candidate.value || node.getAttribute('data-test') === candidate.value || node.getAttribute('data-cy') === candidate.value || node.getAttribute('test-id') === candidate.value);
+            return Array.from(document.querySelectorAll(candidate.value));
+          } catch (_) { return []; }
+        };
+        const validated = alternatives.map((candidate: any) => {
+          const matches = resolveCandidate(candidate);
+          const clickedIndex = matches.indexOf(el);
+          if (clickedIndex < 0 || matches.length === 0) return null;
+          const confidence = candidate.type === 'css' ? (/^\.[\w-]+$/.test(candidate.value) ? 0.8 : 0.6) : Math.max(0.5, 1 - ((priority[candidate.type] || 11) - 1) * 0.045);
+          return { ...candidate, playwright: matches.length > 1 ? `${candidate.playwright}.nth(${clickedIndex})` : candidate.playwright, clickedIndex, matchCount: matches.length, isUnique: matches.length === 1, confidence };
+        }).filter(Boolean).sort((a: any, b: any) => Number(b.isUnique && b.confidence >= 0.8) - Number(a.isUnique && a.confidence >= 0.8) || (priority[a.type] || 99) - (priority[b.type] || 99));
+        primary = validated[0];
+        if (!primary) return null;
+
+        // Wrap the already validated locator in the recorded action.
         let pwAction = primary.playwright;
         if (action === 'click') pwAction += '.click()';
         else if (action === 'dblclick') pwAction += '.dblclick()';
@@ -1279,7 +1318,7 @@ async function startServer() {
             ...primary,
             playwright: 'await ' + pwAction
           },
-          alternatives
+          alternatives: validated.slice(1)
         };
       }
 
@@ -5391,10 +5430,11 @@ async function startServer() {
       }
 
       if (type === 'id') {
-        const escapedId = val.replace(/[!"#$%&'()*+,./:;<=>?@[\\\]^`{|}~]/g, '\\$&');
+        const idValue = val.replace(/^#/, '');
+        const escapedId = idValue.replace(/[!"#$%&'()*+,./:;<=>?@[\\\]^`{|}~]/g, '\\$&');
         candidateLocators.push({
           desc: `#${escapedId}`,
-          getLoc: (ctx = page) => ctx.locator(`[id="${val}" i], #${escapedId}`),
+          getLoc: (ctx = page) => ctx.locator(`[id="${idValue}" i], #${escapedId}`),
           isStrictPrimary: isPrimary
         });
       } else if (type === 'data-testid' || type === 'data-test') {
@@ -5616,9 +5656,17 @@ async function startServer() {
       for (const ctx of contexts) {
         for (const candidate of candidateLocators) {
           try {
-            const loc = candidate.getLoc(ctx).first();
-            const count = await loc.count().catch(() => 0);
+            const baseLoc = candidate.getLoc(ctx);
+            const count = await baseLoc.count().catch(() => 0);
             if (count === 0) continue;
+
+            const definition = candidate.isStrictPrimary ? primary : [...alternatives, ...fallbacks].find((item: any) => item && candidate.desc.includes(String(item.value || '')));
+            const recordedIndex = Number.isInteger(definition?.clickedIndex) ? definition.clickedIndex : undefined;
+            const expectedCount = Number.isInteger(definition?.matchCount) ? definition.matchCount : undefined;
+            if (recordedIndex !== undefined && recordedIndex >= count) continue;
+            if (expectedCount && expectedCount > 1 && recordedIndex === undefined) continue;
+            if (count > 1 && recordedIndex === undefined) continue;
+            const loc = recordedIndex !== undefined ? baseLoc.nth(recordedIndex) : baseLoc;
 
             const isVis = await loc.isVisible().catch(() => false);
             if (!isVis) continue;
@@ -5791,6 +5839,23 @@ async function startServer() {
                 coordinates: livePos?.coordinates || null,
                 targetBox: livePos?.targetBox || null
               };
+            } else if (action === 'focus') {
+              await loc.focus({ timeout: 1500 });
+              return { success: true, coordinates: livePos?.coordinates || null, targetBox: livePos?.targetBox || null };
+            } else if (action === 'press') {
+              await loc.press(String(valueToFill || 'Enter'), { timeout: 3000 });
+              return { success: true, coordinates: livePos?.coordinates || null, targetBox: livePos?.targetBox || null };
+            } else if (action === 'submit') {
+              await loc.evaluate((el: any) => {
+                const form = el.tagName === 'FORM' ? el : el.closest('form');
+                if (!form) throw new Error('Recorded submit target is not associated with a form.');
+                if (typeof form.requestSubmit === 'function') form.requestSubmit(); else form.submit();
+              });
+              return { success: true, coordinates: livePos?.coordinates || null, targetBox: livePos?.targetBox || null };
+            } else if (action === 'upload') {
+              const files = String(valueToFill || '').split(',').map((file: string) => file.trim()).filter(Boolean);
+              await loc.setInputFiles(files, { timeout: 3000 });
+              return { success: true, coordinates: livePos?.coordinates || null, targetBox: livePos?.targetBox || null };
             }
           } catch (err) {}
         }
@@ -5799,7 +5864,13 @@ async function startServer() {
       await page.waitForTimeout(pollIntervalMs);
     }
 
-    // 6. Fallback: In-Browser DOM Evaluation with Fuzzy Attribute & Value Search across all frames
+    // Validated recordings must fail rather than degrade into fuzzy first-match execution.
+    if (primary?.value || alternatives.length > 0 || fallbacks.length > 0) {
+      const availableFallbacks = [...alternatives, ...fallbacks].map((item: any) => item?.value || item).filter(Boolean);
+      throw new Error(`Recorded element could not be uniquely identified. Action: ${action}. Element: ${elementName || 'Unknown'}. Expected index: ${primary?.clickedIndex ?? 'unique'}. Locator: ${rawSelector || 'none'}. Match count: 0. Available fallbacks: ${availableFallbacks.join(', ') || 'none'}`);
+    }
+
+    // 6. Legacy fuzzy fallback for recordings that predate locator metadata.
     const domResult = await page.evaluate(({ targetText, rawSel, act, val }) => {
       let search = (targetText || rawSel || '').toLowerCase().trim();
       const cleanMatch = search.match(/\[(?:name|value|id|role|data-test|data-testid)[*^$]?=["']?([^"']+)["']?\]/i);
@@ -6205,7 +6276,7 @@ async function startServer() {
             if (targetNav) {
               currentUrl = await safeNavigatePage(targetNav);
             }
-          } else if (['click', 'dblclick', 'fill', 'type', 'select', 'selectOption', 'check', 'uncheck', 'hover', 'focus', 'clear', 'scroll'].includes(action)) {
+          } else if (['click', 'dblclick', 'fill', 'type', 'select', 'selectOption', 'check', 'uncheck', 'hover', 'focus', 'clear', 'scroll', 'press', 'submit', 'upload'].includes(action)) {
             // Check if step was recorded on a different page and the browser has not navigated there yet
             const stepRecordedUrl = resolveFullStepUrl(step.url, currentUrl) || resolveCandidateNavUrl(step, currentUrl);
             if (stepRecordedUrl && /^https?:\/\//i.test(stepRecordedUrl)) {
@@ -6240,17 +6311,6 @@ async function startServer() {
             if (!res.success) {
               stepPassed = false;
               stepError = res.error || `Element "${elementName || selector}" was not visible or clickable.`;
-            }
-          } else if (action === 'submit') {
-            const form = selector ? page.locator(selector).first() : page.locator('form').first();
-            await form.evaluate((el: any) => {
-              if (typeof el.requestSubmit === 'function') el.requestSubmit();
-              else el.submit();
-            }, { timeout: 5000 });
-          } else if (action === 'press') {
-            if (value) {
-              const targetLoc = selector ? page.locator(selector).first() : page.keyboard;
-              await targetLoc.press(value, { timeout: 3000 }).catch(() => {});
             }
           } else if (action === 'wait') {
             const waitMs = parseInt(value || '1000', 10) || 1000;

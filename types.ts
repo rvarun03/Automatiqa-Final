@@ -458,14 +458,21 @@ export interface FrameInfo {
 }
 
 export interface StepLocator {
-  type: 'id' | 'name' | 'role' | 'text' | 'css' | 'xpath' | 'accessibility-id' | 'resource-id' | 'content-desc' | 'data-testid' | 'placeholder' | 'url' | 'shadow-pierce';
+  type: 'id' | 'name' | 'role' | 'text' | 'label' | 'aria-label' | 'css' | 'xpath' | 'accessibility-id' | 'resource-id' | 'content-desc' | 'data-testid' | 'data-test' | 'test-id' | 'placeholder' | 'url' | 'shadow-pierce';
   value: string;
   playwright?: string;
+  /** Zero-based position of the recorded DOM element within this locator's matches. */
+  clickedIndex?: number;
+  matchCount?: number;
+  isUnique?: boolean;
+  confidence?: number;
 }
 
 export interface UniversalLocator {
   primary: StepLocator;
   alternatives: StepLocator[];
+  /** Backward-compatible alias accepted from older/newer recorder clients. */
+  fallbacks?: StepLocator[];
 }
 
 export interface RecordedStep {
@@ -495,6 +502,12 @@ export interface RecordedStep {
   coordinates?: { x: number; y: number };
   targetBox?: { x: number; y: number; width: number; height: number };
   frameInfo?: FrameInfo;
+  elementSnapshot?: {
+    tagName?: string; id?: string; className?: string; name?: string;
+    role?: string; ariaLabel?: string; textContent?: string;
+    placeholder?: string; title?: string; href?: string;
+    dataTestId?: string; outerHTML?: string; xpath?: string; cssSelector?: string;
+  };
   pageIndex?: number;
   tabTitle?: string;
   deltaX?: number;
