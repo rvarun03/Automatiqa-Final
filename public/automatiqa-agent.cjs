@@ -126,21 +126,34 @@ function captureScreenshot(deviceId) {
 
 // Cache the last window dump XML to minimize latency
 let cachedXmlHierarchy = { time: 0, xml: '' };
+let lastCapturedFrame = null;
 
-async function getElementAtCoordinates(deviceId, x, y) {
+async function dumpUiHierarchy(deviceId) {
+  const dumpRes = await runCmd(`adb -s ${deviceId} shell uiautomator dump /data/local/tmp/window_dump.xml`);
+  if (!dumpRes.success) return '';
+  const readRes = await runCmd(`adb -s ${deviceId} shell cat /data/local/tmp/window_dump.xml`);
+  return readRes.success && readRes.stdout && readRes.stdout.includes('<hierarchy') ? readRes.stdout : '';
+}
+
+async function refreshCachedXmlHierarchy(deviceId) {
+  const xml = await dumpUiHierarchy(deviceId);
+  if (xml) cachedXmlHierarchy = { time: Date.now(), xml };
+  return xml;
+}
+
+async function getHierarchyBeforeGesture(deviceId) {
+  if (cachedXmlHierarchy.xml && Date.now() - cachedXmlHierarchy.time < 2500) return cachedXmlHierarchy.xml;
+  return refreshCachedXmlHierarchy(deviceId);
+}
+
+async function getElementAtCoordinates(deviceId, x, y, preloadedXml) {
   try {
     const now = Date.now();
-    let xmlContent = '';
+    let xmlContent = typeof preloadedXml === 'string'
+      ? preloadedXml
+      : (preloadedXml === true ? await getHierarchyBeforeGesture(deviceId) : '');
 
-    // Dump window hierarchy to /data/local/tmp/window_dump.xml
-    const dumpRes = await runCmd(`adb -s ${deviceId} shell uiautomator dump /data/local/tmp/window_dump.xml`);
-    if (dumpRes.success) {
-      const readRes = await runCmd(`adb -s ${deviceId} shell cat /data/local/tmp/window_dump.xml`);
-      if (readRes.success && readRes.stdout && readRes.stdout.includes('<hierarchy')) {
-        xmlContent = readRes.stdout;
-        cachedXmlHierarchy = { time: now, xml: xmlContent };
-      }
-    }
+    if (!xmlContent) xmlContent = await refreshCachedXmlHierarchy(deviceId);
 
     if (!xmlContent && now - cachedXmlHierarchy.time < 10000 && cachedXmlHierarchy.xml) {
       xmlContent = cachedXmlHierarchy.xml;
@@ -153,6 +166,7 @@ async function getElementAtCoordinates(deviceId, x, y) {
     let match;
     let bestNodeAttributes = null;
     let smallestArea = Infinity;
+    let bestInteractionRank = Infinity;
 
     while ((match = nodeRegex.exec(xmlContent)) !== null) {
       const allAttrs = (match[1] + ' ' + match[6]).trim();
@@ -174,20 +188,20 @@ async function getElementAtCoordinates(deviceId, x, y) {
         const isClickable = getAttr('clickable') === 'true';
         const hasText = !!getAttr('text');
         const hasDesc = !!getAttr('content-desc');
+        const nodeClass = getAttr('class') || 'android.view.View';
+        const isNativeControl = /(?:EditText|Button|CheckBox|RadioButton|Switch|Spinner)$/i.test(nodeClass);
 
-        // Prefer clickable or labeled elements
-        let areaScore = area;
-        if (isClickable || hasText || hasDesc) {
-          areaScore = area * 0.8; // Give priority
-        }
-
-        if (areaScore < smallestArea) {
-          smallestArea = areaScore;
+        // Prefer the actual input/button over a smaller TextView rendered
+        // inside it. Area is only compared among equally useful node types.
+        const interactionRank = isNativeControl ? 0 : isClickable ? 1 : (hasText || hasDesc) ? 2 : 3;
+        if (interactionRank < bestInteractionRank || (interactionRank === bestInteractionRank && area < smallestArea)) {
+          bestInteractionRank = interactionRank;
+          smallestArea = area;
           bestNodeAttributes = {
             resourceId: getAttr('resource-id'),
             contentDescription: getAttr('content-desc'),
             text: getAttr('text'),
-            className: getAttr('class') || 'android.view.View',
+            className: nodeClass,
             clickable: isClickable,
             bounds: `[${x1},${y1}][${x2},${y2}]`
           };
@@ -197,10 +211,33 @@ async function getElementAtCoordinates(deviceId, x, y) {
 
     if (!bestNodeAttributes) return null;
 
+    // Generic clickable containers often own a visible TextView rather than
+    // exposing their own label. Use the nearest visible semantic node.
+    if (!bestNodeAttributes.text && !bestNodeAttributes.contentDescription) {
+      const semanticNodes = [];
+      const semanticRegex = /<node\s+([^>]*)\s+bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"([^>]*)\/?>/g;
+      let semanticMatch;
+      while ((semanticMatch = semanticRegex.exec(xmlContent)) !== null) {
+        const attrs = `${semanticMatch[1]} ${semanticMatch[6]}`;
+        const label = attrs.match(/(?:content-desc|text)="([^"]+)"/)?.[1]?.trim();
+        if (!label) continue;
+        const sx1 = Number(semanticMatch[2]);
+        const sy1 = Number(semanticMatch[3]);
+        const sx2 = Number(semanticMatch[4]);
+        const sy2 = Number(semanticMatch[5]);
+        const dx = x < sx1 ? sx1 - x : x > sx2 ? x - sx2 : 0;
+        const dy = y < sy1 ? sy1 - y : y > sy2 ? y - sy2 : 0;
+        const distance = Math.hypot(dx, dy);
+        if (distance <= 220) semanticNodes.push({ label, distance });
+      }
+      semanticNodes.sort((a, b) => a.distance - b.distance);
+      if (semanticNodes[0]) bestNodeAttributes.hint = semanticNodes[0].label;
+    }
+
     let { resourceId, contentDescription, text, hint, password, className, bounds, focused } = bestNodeAttributes;
     // Some apps expose an empty EditText but render its label as a nearby
     // TextView. Associate the closest label above/overlapping the input.
-    if (!resourceId && !contentDescription && !text && !hint && /EditText$/i.test(className || '')) {
+    if (!contentDescription && !hint && /EditText$/i.test(className || '')) {
       const inputBounds = bounds.match(/\[(\d+),(\d+)\]\[(\d+),(\d+)\]/);
       if (inputBounds) {
         const [, ix1, iy1, ix2] = inputBounds.map(Number);
@@ -211,6 +248,7 @@ async function getElementAtCoordinates(deviceId, x, y) {
           const attrs = `${labelMatch[1]} ${labelMatch[6]}`;
           const label = attrs.match(/(?:text|content-desc)="([^"]+)"/)?.[1]?.trim();
           if (!label) continue;
+          if (text && label === text) continue;
           const lx1 = Number(labelMatch[2]);
           const ly2 = Number(labelMatch[5]);
           const lx2 = Number(labelMatch[4]);
@@ -225,7 +263,7 @@ async function getElementAtCoordinates(deviceId, x, y) {
       }
     }
     const isAndroidSystemSurface = /^android:id\/(?:navigationBarBackground|statusBarBackground|content)$/i.test(resourceId);
-    const hasStableSemanticLocator = !!(resourceId || contentDescription || text);
+    const hasStableSemanticLocator = !!(resourceId || contentDescription || text || hint);
     const isNativeInteractiveControl = /(?:EditText|Button|CheckBox|RadioButton|Switch|Spinner)$/i.test(className || '');
     // Containers, root canvas views and Android system bars are not the
     // control the user intended to tap. Returning null makes the recorder use
@@ -236,7 +274,22 @@ async function getElementAtCoordinates(deviceId, x, y) {
     let primaryValue = '';
     let playwrightScript = '';
 
-    if (text) {
+    if (/EditText$/i.test(className || '') && resourceId) {
+      primaryType = 'resource-id';
+      primaryValue = resourceId;
+      xpath = `//*[@resource-id="${resourceId}"]`;
+      playwrightScript = `await driver.elementById("${resourceId}").click();`;
+    } else if (/EditText$/i.test(className || '') && contentDescription) {
+      primaryType = 'accessibility-id';
+      primaryValue = contentDescription;
+      xpath = `//*[@content-desc="${contentDescription}"]`;
+      playwrightScript = `await driver.elementByAccessibilityId("${contentDescription}").click();`;
+    } else if (/EditText$/i.test(className || '')) {
+      primaryType = 'xpath';
+      primaryValue = `//${className}[@bounds='${bounds}']`;
+      xpath = primaryValue;
+      playwrightScript = `const el = await driver.elementByXPath("${xpath}");\nawait el.click();`;
+    } else if (text) {
       primaryType = 'text';
       primaryValue = text;
       xpath = `//*[@text="${text}"]`;
@@ -266,6 +319,8 @@ async function getElementAtCoordinates(deviceId, x, y) {
       hint,
       password,
       className,
+      clickable: bestNodeAttributes.clickable,
+      bounds,
       xpath,
       primaryType,
       primaryValue,
@@ -552,6 +607,7 @@ async function startAdbTouchListener(deviceId) {
   let isTouching = false;
   let lastRecordedTime = 0;
   let elementAtTouchStart = null;
+  let screenshotAtTouchStart = null;
 
   try {
     touchListenerProcess = spawn('adb', ['-s', deviceId, 'shell', 'getevent', '-l']);
@@ -597,17 +653,21 @@ async function startAdbTouchListener(deviceId) {
               const screenY = touchDeviceBounds.touchMaxY > touchDeviceBounds.displayHeight
                 ? Math.round((currentRawY / touchDeviceBounds.touchMaxY) * touchDeviceBounds.displayHeight)
                 : currentRawY;
-              elementAtTouchStart = getElementAtCoordinates(deviceId, screenX, screenY, true);
+              elementAtTouchStart = refreshCachedXmlHierarchy(deviceId)
+                .then(xml => getElementAtCoordinates(deviceId, screenX, screenY, xml || true))
+                .catch(() => getElementAtCoordinates(deviceId, screenX, screenY, true));
             }
           }
         }
         // Many Android touch drivers report tracking IDs without BTN_TOUCH.
         else if ((line.includes('ABS_MT_TRACKING_ID') || line.includes('0039 ')) && !line.includes('ffffffff')) {
           isTouching = true;
+          screenshotAtTouchStart = lastCapturedFrame;
         }
         // Touch / Mouse Down
         else if ((line.includes('BTN_TOUCH') || line.includes('BTN_LEFT') || line.includes('BTN_MOUSE')) && line.includes('DOWN')) {
           isTouching = true;
+          screenshotAtTouchStart = lastCapturedFrame;
           const rawX = currentRawX !== null ? currentRawX : lastSeenRawX;
           const rawY = currentRawY !== null ? currentRawY : lastSeenRawY;
           if (rawX !== null && rawY !== null) {
@@ -619,7 +679,9 @@ async function startAdbTouchListener(deviceId) {
               : rawY;
             // Start Appium/UIAutomator inspection before the tap can navigate
             // away from the element that the user actually touched.
-            elementAtTouchStart = getElementAtCoordinates(deviceId, screenX, screenY, true);
+            elementAtTouchStart = refreshCachedXmlHierarchy(deviceId)
+              .then(xml => getElementAtCoordinates(deviceId, screenX, screenY, xml || true))
+              .catch(() => getElementAtCoordinates(deviceId, screenX, screenY, true));
           }
         }
         // Touch / Mouse Up or Release
@@ -655,8 +717,10 @@ async function startAdbTouchListener(deviceId) {
                 screenY = Math.max(0, Math.min(touchDeviceBounds.displayHeight, screenY));
 
                 const capturedElement = elementAtTouchStart;
+                const capturedScreenshot = screenshotAtTouchStart;
                 elementAtTouchStart = null;
-                handlePhysicalEmulatorTap(deviceId, screenX, screenY, capturedElement);
+                screenshotAtTouchStart = null;
+                handlePhysicalEmulatorTap(deviceId, screenX, screenY, capturedElement, capturedScreenshot);
               }
             }
           }
@@ -745,14 +809,21 @@ async function handleHardwareKeyPress(deviceId, keyName, keycode) {
   }
 }
 
-async function handlePhysicalEmulatorTap(deviceId, x, y, elementPromise) {
+async function handlePhysicalEmulatorTap(deviceId, x, y, elementPromise, touchDownScreenshot) {
   try {
     if (!isTargetInForeground()) {
       skipForegroundMismatch(`physical tap at (${x}, ${y})`);
       return;
     }
     console.log(`[ADB Tap Event] Detected physical tap at coordinates (${x}, ${y}) on ${deviceId}`);
-    const locatorAttr = await getElementAtCoordinates(deviceId, x, y);
+    const preActionScreenshot = touchDownScreenshot || lastCapturedFrame;
+    // Prefer the hierarchy snapshot started on touch-down. Resolving only after
+    // release can identify the destination screen instead of the touched node.
+    const [locatorAttr, freshScreenshot] = await Promise.all([
+      Promise.resolve(elementPromise).catch(() => null)
+        .then(value => value || getElementAtCoordinates(deviceId, x, y)),
+      captureScreenshot(deviceId).catch(() => null)
+    ]);
 
     const labelName = getAndroidElementName(locatorAttr) || `Unlabelled Android element`;
     const playwrightCode = locatorAttr?.playwrightScript || `await driver.touchPerform([{ action: 'tap', options: { x: ${x}, y: ${y} } }]);`;
@@ -784,6 +855,9 @@ async function handlePhysicalEmulatorTap(deviceId, x, y, elementPromise) {
         x,
         y,
         bounds: locatorAttr?.bounds,
+        // Playback must show what the user saw before the action mutated the
+        // label/screen (for example Upload -> Update or Like -> Liked).
+        screenshot: preActionScreenshot || freshScreenshot,
         timestamp: Date.now()
       }
     };
@@ -816,10 +890,21 @@ function getAndroidElementName(locatorAttr) {
     if (/email/i.test(identity)) return 'Email field';
     if (/user(?:name)?/i.test(identity)) return 'Username field';
     if (locatorAttr.hint) return `${locatorAttr.hint} field`;
+    if (locatorAttr.resourceId) {
+      const fieldId = String(locatorAttr.resourceId).split(/[:/]id\//).pop() || '';
+      const fieldName = fieldId.replace(/([a-z0-9])([A-Z])/g, '$1 $2').replace(/[_-]+/g, ' ')
+        .replace(/^(?:edit|text|input|field|et)\s+/i, '').trim();
+      if (fieldName) return `${fieldName.replace(/\b\w/g, c => c.toUpperCase())} field`;
+    }
     return 'Text field';
   }
-  const semanticName = locatorAttr.contentDescription || locatorAttr.accessibilityId || locatorAttr.text;
-  if (semanticName && /[a-z0-9]{2}/i.test(String(semanticName))) return String(semanticName).trim();
+  const semanticName = locatorAttr.contentDescription || locatorAttr.accessibilityId || locatorAttr.text || locatorAttr.hint;
+  if (semanticName && /[a-z0-9]{2}/i.test(String(semanticName))) {
+    const cleanName = String(semanticName).trim();
+    return locatorAttr.clickable && !/\b(?:button|field|input|toggle|checkbox|link)\b/i.test(cleanName)
+      ? `${cleanName} button`
+      : cleanName;
+  }
   if (locatorAttr.resourceId) {
     const id = String(locatorAttr.resourceId).split(/[:/]id\//).pop() || String(locatorAttr.resourceId);
     const words = id
@@ -889,6 +974,7 @@ async function startStreamingAndCommandPolling() {
       if (now - lastUploadedFrameTime >= 400) {
         const frame = await captureScreenshot(deviceId);
         if (frame) {
+          lastCapturedFrame = frame;
           await postJson(`${serverUrl}/api/device-agent/upload-frame`, {
             email: userEmail,
             frame
@@ -965,6 +1051,7 @@ async function startStreamingAndCommandPolling() {
 
           let cmd = '';
           let locatorAttr = null;
+          let locatorPromise = null;
 
           if (action === 'click' || action === 'tap' || action === 'double_tap' || action === 'long_press') {
             cmd = `adb -s ${actionDeviceId} shell input tap ${params.x} ${params.y}`;
@@ -975,7 +1062,9 @@ async function startStreamingAndCommandPolling() {
             }
             // Execute live taps immediately. A UIAutomator dump can take
             // multiple seconds and must not block the device interaction.
-            locatorPromise = getElementAtCoordinates(actionDeviceId, params.x, params.y);
+            locatorPromise = refreshCachedXmlHierarchy(actionDeviceId)
+              .then(xml => getElementAtCoordinates(actionDeviceId, params.x, params.y, xml || true))
+              .catch(() => getElementAtCoordinates(actionDeviceId, params.x, params.y, true));
           } else if (action === 'type' || action === 'fill') {
             const escaped = (params.text || '').replace(/ /g, '%s');
             cmd = `adb -s ${actionDeviceId} shell input text "${escaped}"`;
@@ -1044,9 +1133,8 @@ async function startStreamingAndCommandPolling() {
           }
 
           if (cmd) {
-            if (locatorPromise) {
-              locatorAttr = await locatorPromise.catch(() => null);
-            }
+            // Keep the hierarchy lookup pre-action; do not block dispatch on
+            // a potentially stale cached dump.
             await runCmd(cmd);
 
             // Resolve the node after the ADB command has already been sent. The
@@ -1054,6 +1142,7 @@ async function startStreamingAndCommandPolling() {
             if (locatorPromise) {
               locatorAttr = await locatorPromise.catch(() => null);
             }
+            const actionScreenshot = await captureScreenshot(actionDeviceId).catch(() => null);
 
             await postJson(`${serverUrl}/api/device-agent/upload-logs`, {
               email: userEmail,
@@ -1061,6 +1150,10 @@ async function startStreamingAndCommandPolling() {
               type: 'info',
               url: 'ADB'
             }).catch(() => {});
+
+            // Browser-inspector taps are recorded before dispatch so the UI is
+            // responsive. In that case only execute the ADB action here.
+            if (params.recordStep === false) continue;
 
             const labelName = getAndroidElementName(locatorAttr) || 'Screen position';
             const stepPayload = {
@@ -1098,7 +1191,8 @@ async function startStreamingAndCommandPolling() {
                 platform: 'mobile',
                 x: params.x,
                 y: params.y,
-                timestamp: Date.now()
+                timestamp: Date.now(),
+                screenshot: actionScreenshot || undefined
               }
             };
 

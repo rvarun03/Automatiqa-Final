@@ -157,6 +157,7 @@ export interface MobilePlaybackEmulatorProps {
   isClicking: boolean;
   activeTypingText?: string;
   stepScreenshots?: Record<string, string>;
+  liveFrame?: string | null;
   viewMode?: 'interactive' | 'screenshot';
   onToggleViewMode?: (mode: 'interactive' | 'screenshot') => void;
   showInteractionOverlay?: boolean;
@@ -171,6 +172,7 @@ export const MobilePlaybackEmulator: React.FC<MobilePlaybackEmulatorProps> = ({
   isClicking,
   activeTypingText = '',
   stepScreenshots = {},
+  liveFrame = null,
   viewMode = 'interactive',
   onToggleViewMode,
   showInteractionOverlay = true
@@ -379,12 +381,9 @@ export const MobilePlaybackEmulator: React.FC<MobilePlaybackEmulatorProps> = ({
   }, [steps, currentStepIndex, currentStep, archetype]);
 
   // Determine active screenshot if available
-  const activeScreenshot = currentStep?.screenshot || 
-    (currentStep ? stepScreenshots[currentStep.id] : undefined) || 
-    (currentStep ? flow?.stepScreenshots?.[currentStep.id] : undefined) ||
-    (flow?.screenshots && flow.screenshots[currentStepIndex]) || 
-    Object.values(stepScreenshots)[currentStepIndex] ||
-    Object.values(flow?.stepScreenshots || {})[currentStepIndex];
+  // Playback must mirror the connected device. Recorded screenshots are
+  // evidence only and must never replace the live device frame.
+  const activeScreenshot = undefined;
 
   // Target element bounding box for active step
   const targetMetrics = useMemo(() => {
@@ -446,7 +445,11 @@ export const MobilePlaybackEmulator: React.FC<MobilePlaybackEmulatorProps> = ({
         <div className="flex-1 bg-slate-900 relative overflow-hidden flex flex-col">
           
           {/* Mode A: Direct Captured Screenshot View (if mode is set to screenshot and screenshot exists) */}
-          {activeScreenshot ? (
+          {liveFrame ? (
+            <div className="w-full h-full relative bg-black flex items-center justify-center overflow-hidden">
+              <img src={liveFrame} alt="Live Android device screen" className="w-full h-full object-fill object-top pointer-events-none" referrerPolicy="no-referrer" />
+            </div>
+          ) : activeScreenshot ? (
             <div className="w-full h-full relative bg-slate-950 flex items-center justify-center overflow-hidden">
               <img
                 src={activeScreenshot}

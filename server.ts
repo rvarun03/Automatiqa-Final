@@ -10087,7 +10087,9 @@ pause
     const frameData = frame || image;
 
     if (frameData) {
-      const session = activeMobileSessions.get(userEmail);
+      const session = activeMobileSessions.get(userEmail) || (activeMobileSessions.size === 1
+        ? Array.from(activeMobileSessions.values())[0]
+        : undefined);
       if (session) {
         session.lastFrame = frameData;
       }
@@ -10098,7 +10100,7 @@ pause
 
       // Broadcast real-time screen frame to connected UI clients
       try {
-        io.emit('MOBILE_FRAME', { frame: frameData, email: userEmail });
+        io.emit('MOBILE_FRAME', { frame: frameData, email: session?.email || userEmail });
       } catch (err) {}
     }
 
@@ -10274,30 +10276,54 @@ pause
     res.json({ success: true, actions: queue });
   });
 
+  // Playback starts from a clean command queue. This prevents taps queued
+  // during recording (or a previous run) from being executed on app launch.
+  app.post("/api/device-agent/clear-pending-actions", (req, res) => {
+    const userEmail = ((req.body?.email || req.query.email || "sowbarnya@qaoncloud.com") as string).toLowerCase();
+    const agent = getMobileAgent(userEmail);
+    pendingActionsMap.set(agent?.email || userEmail, []);
+    res.json({ success: true });
+  });
+
   // Record Event Endpoint
   app.post(["/api/device-agent/record-event", "/api/mobile/agent/record-event"], (req, res) => {
     const { email, event } = req.body;
-    const userEmail = (email || "sowbarnya@qaoncloud.com").toLowerCase();
+    const agentEmail = (email || "sowbarnya@qaoncloud.com").toLowerCase();
     const eventPayload = event || req.body;
 
     if (eventPayload && (eventPayload.action || eventPayload.event)) {
       const stepData = eventPayload.event || eventPayload;
+      // The desktop agent may use an operator email that differs from the
+      // browser user. Route it to the only active mobile recording when there
+      // is no direct email match, then tag it with that recording's owner.
+      const directSession = activeMobileSessions.get(agentEmail);
+      const session = directSession || (activeMobileSessions.size === 1
+        ? Array.from(activeMobileSessions.values())[0]
+        : undefined);
+      const sessionEmail = session?.email || agentEmail;
+      const agentFrame = (registeredMobileAgents.get(agentEmail) as any)?.lastFrame;
+      const broadcastStep = {
+        ...stepData,
+        screenshot: stepData.screenshot || session?.lastFrame || agentFrame,
+        __userEmail: sessionEmail
+      };
 
       // Store in active session
-      const session = activeMobileSessions.get(userEmail);
       if (session) {
         if (!session.recordedSteps) session.recordedSteps = [];
-        session.recordedSteps.push(stepData);
+        if (!broadcastStep.id || !session.recordedSteps.some(step => step.id === broadcastStep.id)) {
+          session.recordedSteps.push(broadcastStep);
+        }
       }
 
       // Broadcast to UI via Socket.io
       try {
-        io.emit('RECORDED_STEP', stepData);
+        io.emit('RECORDED_STEP', broadcastStep);
         io.emit('MOBILE_LOG', {
           log: `[ADB Action Captured] ${stepData.action?.toUpperCase()} on "${stepData.elementName || stepData.locator?.primary?.value || 'element'}"`,
           type: 'info',
           url: 'ADB',
-          email: userEmail
+          email: sessionEmail
         });
       } catch (err) {}
     }
@@ -10378,7 +10404,20 @@ pause
       lastHeartbeat: Date.now()
     });
 
-    res.json({ success: true, message: "Mobile Execution Agent registered successfully" });
+    const directSession = activeMobileSessions.get(userEmail);
+    const activeSession = directSession || (activeMobileSessions.size === 1
+      ? Array.from(activeMobileSessions.values())[0]
+      : undefined);
+
+    res.json({
+      success: true,
+      message: "Mobile Execution Agent registered successfully",
+      recording: activeSession ? {
+        deviceId: activeSession.deviceId,
+        appPackage: activeSession.packageName,
+        status: activeSession.status === 'RUNNING' ? 'Recording' : 'Starting'
+      } : null
+    });
   });
 
   // Backward compatibility heartbeat

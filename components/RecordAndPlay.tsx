@@ -103,6 +103,11 @@ import { RecordPlayVideoUploadModal } from './RecordPlayVideoUploadModal';
 import { extractApkBundle } from '../services/apkExtractorService';
 import { detectAppArchetype } from '../services/mobileAppDefinitionService';
 import { addTokenLog } from '../services/tokenConsumptionService';
+import { clearMobileSessionSteps, clearPendingMobileDeviceActions, DEFAULT_MOBILE_USER_EMAIL, performMobileDeviceAction } from '../services/mobileRecordingService';
+import { useMobileRecordingSync } from '../hooks/useMobileRecordingSync';
+import { useMobileRecorderState } from '../hooks/useMobileRecorderState';
+import { useMobileStepCapture } from '../hooks/useMobileStepCapture';
+import { collectMobileStepScreenshots, serializeStepsForLocalRecovery } from '../utils/mobileRecordingSteps';
 import { 
   BddDocumentParsed, 
   parseBddDocument, 
@@ -385,102 +390,27 @@ const RecordAndPlay: React.FC<RecordAndPlayProps> = ({ project, user, onUpdatePr
   const [targetUrl, setTargetUrl] = useState('https://');
   const [targetDevice, setTargetDevice] = useState('iPhone 15 Pro (iOS 17.0)');
 
-  // Mobile Recording Configuration and Device Agent states
-  const [mobilePlatform, setMobilePlatform] = useState<'Android'>('Android');
-  const [connectionType, setConnectionType] = useState<'real' | 'emulator'>('real');
-  const [mobileDevice, setMobileDevice] = useState<string>('');
-  const [mobileAppType, setMobileAppType] = useState<'installed' | 'apk' | 'package' | 'web'>('installed');
-  const [mobileInstalledApp, setMobileInstalledApp] = useState<string>('com.qalculate.android');
-  const [mobilePackageName, setMobilePackageName] = useState<string>('com.qalculate.android');
-  const [mobileAppActivity, setMobileAppActivity] = useState<string>('com.qalculate.android.MainActivity');
-  const [mobileWebUrl, setMobileWebUrl] = useState<string>('https://example.com');
-  const [mobileApkFile, setMobileApkFile] = useState<File | null>(null);
-  const [mobileApkName, setMobileApkName] = useState<string>('QALculate.v4.2.0.apk');
-  const [captureScreenshots, setCaptureScreenshots] = useState<boolean>(true);
-  const [captureVideo, setCaptureVideo] = useState<boolean>(true);
-  const [captureLogcat, setCaptureLogcat] = useState<boolean>(true);
-  const [captureNetwork, setCaptureNetwork] = useState<boolean>(true);
-
-  // Agent connection details
-  const [agentConnected, setAgentConnected] = useState<boolean>(false);
-  const [localAgentState, setLocalAgentState] = useState<'connected' | 'offline' | 'not_installed'>('not_installed');
-  const [deviceCheckError, setDeviceCheckError] = useState<string | null>(null);
-  const [isStartingAgent, setIsStartingAgent] = useState<boolean>(false);
-  const [isInstallingAgent, setIsInstallingAgent] = useState<boolean>(false);
-  const [useDemoFallback, setUseDemoFallback] = useState<boolean>(false);
-  const [availableDevices, setAvailableDevices] = useState<any[]>([]);
-  const [availableApps, setAvailableApps] = useState<any[]>([
-    { name: 'F-Droid FOSS Store', package: 'org.fdroid.fdroid', icon: 'package' },
-    { name: 'Malarm Alarm Clock', package: 'org.schabi.malarm', icon: 'clock' },
-    { name: 'QALculate Mobile App', package: 'com.qalculate.android', icon: 'calculator' },
-    { name: 'Sauce Labs My Demo App', package: 'com.saucelabs.mydemoapp.android', icon: 'shopping-bag' },
-    { name: 'WhatsApp Business', package: 'com.whatsapp', icon: 'message' },
-    { name: 'Google Chrome', package: 'com.android.chrome', icon: 'globe' },
-    { name: 'Android Settings', package: 'com.android.settings', icon: 'settings' },
-    { name: 'Machaxi Sports', package: 'com.machaxi.app', icon: 'activity' },
-    { name: 'Swiggy Food Delivery', package: 'in.swiggy.android', icon: 'utensils' },
-    { name: 'Amazon Shopping', package: 'com.amazon.mShop.android.shopping', icon: 'shopping-bag' },
-    { name: 'Google Pay / Finance', package: 'com.google.android.apps.nbu.paisa.user', icon: 'credit-card' }
-  ]);
-  const [isInstallingApk, setIsInstallingApk] = useState<boolean>(false);
-
-  // Simulated Mobile App state
-  const [mobileAppScreen, setMobileAppScreen] = useState<string>('login'); // login, home, url, screenshot, video, reports, settings
-  const [mobileAppInputVal, setMobileAppInputVal] = useState<string>('');
-  const [mobileLoginEmail, setMobileLoginEmail] = useState<string>('sowbarnya@qaoncloud.com');
-  const [mobileLoginPassword, setMobileLoginPassword] = useState<string>('AutomatiQA2026!');
-  const [rememberMe, setRememberMe] = useState<boolean>(true);
-  const [isMobileLoggedIn, setIsMobileLoggedIn] = useState<boolean>(false);
-  const [mobileSwipeStart, setMobileSwipeStart] = useState<{ x: number, y: number } | null>(null);
-  const [isOrientationLandscape, setIsOrientationLandscape] = useState<boolean>(false);
-  const [isKeyboardVisible, setIsKeyboardVisible] = useState<boolean>(false);
-  const [keyboardMode, setKeyboardMode] = useState<'qwerty' | 'numbers'>('qwerty');
-  const [focusedInput, setFocusedInput] = useState<'email' | 'password' | 'generic' | null>(null);
-  const [showNotifications, setShowNotifications] = useState<boolean>(false);
-
-  // Real Android Emulator Hardware States
-  const [touchRipples, setTouchRipples] = useState<{ id: number; x: number; y: number }[]>([]);
-  const [isPhoneLocked, setIsPhoneLocked] = useState<boolean>(false);
-  const [volumeLevel, setVolumeLevel] = useState<number>(80);
-  const [showVolumeHud, setShowVolumeHud] = useState<boolean>(false);
-  const [useGestureNav, setUseGestureNav] = useState<boolean>(false);
-
-  const triggerTouchRipple = (x: number, y: number) => {
-    const newRipple = { id: Date.now() + Math.random(), x, y };
-    setTouchRipples((prev) => [...prev.slice(-3), newRipple]);
-    setTimeout(() => {
-      setTouchRipples((prev) => prev.filter((r) => r.id !== newRipple.id));
-    }, 550);
-  };
-
-  const handleVolumeChange = (delta: number) => {
-    setVolumeLevel((prev) => {
-      const next = Math.min(100, Math.max(0, prev + delta));
-      return next;
-    });
-    setShowVolumeHud(true);
-    setTimeout(() => setShowVolumeHud(false), 2000);
-  };
-
-  // Real-time mobile mirroring states
-  const [liveMobileFrame, setLiveMobileFrame] = useState<string | null>(null);
-  const [mobileError, setMobileError] = useState<string | null>(null);
-
-  // Mobile Live Recording Inspector States
-  const [isMobileInspectorActive, setIsMobileInspectorActive] = useState<boolean>(true);
-  const [selectedMobileInspectorElement, setSelectedMobileInspectorElement] = useState<any>(null);
-  const [hoveredMobileInspectorElement, setHoveredMobileInspectorElement] = useState<any>(null);
-  const [mobileInspectorMode, setMobileInspectorMode] = useState<'tap' | 'type' | 'assert' | 'long_press' | 'swipe'>('tap');
-  const [mobileInspectorInputValue, setMobileInspectorInputValue] = useState<string>('');
-  const [mobileActiveAppTab, setMobileActiveAppTab] = useState<'home' | 'login' | 'form' | 'catalog' | 'settings'>('home');
-  const [mobileHierarchySearch, setMobileHierarchySearch] = useState<string>('');
-  const [mobileApkUser, setMobileApkUser] = useState<string>('tester@qaoncloud.com');
-  const [mobileApkPass, setMobileApkPass] = useState<string>('Password123');
-  const [mobileApkNameInput, setMobileApkNameInput] = useState<string>('Alex Johnson');
-  const [mobileApkEmailInput, setMobileApkEmailInput] = useState<string>('alex.j@example.com');
-  const [mobileApkNotesInput, setMobileApkNotesInput] = useState<string>('Testing booking slot');
-  const [mobileApkSearchInput, setMobileApkSearchInput] = useState<string>('Badminton Court');
-  const [mobileFocusedField, setMobileFocusedField] = useState<string | null>(null);
+  const {
+    mobilePlatform, setMobilePlatform, connectionType, setConnectionType, mobileDevice, setMobileDevice,
+    mobileAppType, setMobileAppType, mobileInstalledApp, setMobileInstalledApp, mobilePackageName, setMobilePackageName,
+    mobileAppActivity, setMobileAppActivity, mobileWebUrl, setMobileWebUrl, mobileApkFile, setMobileApkFile,
+    mobileApkName, setMobileApkName, captureScreenshots, setCaptureScreenshots, captureVideo, setCaptureVideo,
+    captureLogcat, setCaptureLogcat, captureNetwork, setCaptureNetwork, agentConnected, setAgentConnected,
+    localAgentState, setLocalAgentState, deviceCheckError, setDeviceCheckError, isStartingAgent, setIsStartingAgent,
+    isInstallingAgent, setIsInstallingAgent, useDemoFallback, setUseDemoFallback, availableDevices, setAvailableDevices,
+    availableApps, setAvailableApps, isInstallingApk, setIsInstallingApk, mobileAppScreen, setMobileAppScreen,
+    mobileAppInputVal, setMobileAppInputVal, mobileLoginEmail, setMobileLoginEmail, mobileLoginPassword, setMobileLoginPassword,
+    rememberMe, setRememberMe, isMobileLoggedIn, setIsMobileLoggedIn, mobileSwipeStart, setMobileSwipeStart,
+    isOrientationLandscape, setIsOrientationLandscape, isKeyboardVisible, setIsKeyboardVisible, keyboardMode, setKeyboardMode,
+    focusedInput, setFocusedInput, showNotifications, setShowNotifications, touchRipples, triggerTouchRipple,
+    isPhoneLocked, setIsPhoneLocked, volumeLevel, handleVolumeChange, showVolumeHud, useGestureNav, setUseGestureNav,
+    liveMobileFrame, setLiveMobileFrame, mobileError, setMobileError, isMobileInspectorActive, setIsMobileInspectorActive,
+    selectedMobileInspectorElement, setSelectedMobileInspectorElement, hoveredMobileInspectorElement, setHoveredMobileInspectorElement,
+    mobileInspectorMode, setMobileInspectorMode, mobileInspectorInputValue, setMobileInspectorInputValue,
+    mobileActiveAppTab, setMobileActiveAppTab, mobileHierarchySearch, setMobileHierarchySearch, mobileApkUser, setMobileApkUser,
+    mobileApkPass, setMobileApkPass, mobileApkNameInput, setMobileApkNameInput, mobileApkEmailInput, setMobileApkEmailInput,
+    mobileApkNotesInput, setMobileApkNotesInput, mobileApkSearchInput, setMobileApkSearchInput, mobileFocusedField, setMobileFocusedField
+  } = useMobileRecorderState();
 
   // Playback Engine State & Browser Selection
   const [isBrowserSelectModalOpen, setIsBrowserSelectModalOpen] = useState<boolean>(false);
@@ -743,11 +673,10 @@ const RecordAndPlay: React.FC<RecordAndPlayProps> = ({ project, user, onUpdatePr
     setStepExecutionStatus(initialStatuses);
     setStepExecutionTime({});
 
-    if (firstStep.screenshot) {
-      setPlaybackStepScreenshots({ [firstStep.id]: firstStep.screenshot });
-    } else {
-      setPlaybackStepScreenshots({});
-    }
+    setPlaybackStepScreenshots({
+      ...(activeFlow.stepScreenshots || {}),
+      ...collectMobileStepScreenshots(activeFlow.steps).stepScreenshots
+    });
 
     setPlaybackLogs([
       {
@@ -793,6 +722,102 @@ const RecordAndPlay: React.FC<RecordAndPlayProps> = ({ project, user, onUpdatePr
 
     const steps = targetFlow.steps;
     const chosenBrowserObj = PLAYBACK_BROWSER_OPTIONS.find(b => b.id === playbackSelectedBrowser) || PLAYBACK_BROWSER_OPTIONS[0];
+
+    // Mobile flows are executed against the connected Android device. The
+    // browser playback engine cannot reproduce native views (and previously
+    // only animated the recorded cards), so launch the app and dispatch every
+    // recorded action through the agent's ADB/Appium-compatible queue.
+    if (targetFlow.platform === 'mobile') {
+      const email = user?.email || DEFAULT_MOBILE_USER_EMAIL;
+      const packageName = mobilePackageName || mobileInstalledApp || targetFlow.mobilePackageName || (targetFlow as any).packageName;
+      if (!packageName) {
+        setPlaybackStatus('failed');
+        toast.error('Mobile playback needs an installed app package.');
+        return;
+      }
+      try {
+        // Discard commands left over from recording/previous playback before
+        // opening the app. Only commands generated by this run may execute.
+        await clearPendingMobileDeviceActions(email).catch(() => {});
+        setPlaybackLogs(prev => [...prev, {
+          timestamp: new Date().toLocaleTimeString(), level: 'info',
+          message: `📱 Opening ${packageName} on ${mobileDevice || 'connected Android device'}...`
+        }]);
+        await performMobileDeviceAction(email, 'launch_app', {
+          packageName,
+          launchActivity: mobileAppActivity || (targetFlow as any).launchActivity || '.MainActivity',
+          deviceId: mobileDevice
+        });
+        await new Promise(resolve => setTimeout(resolve, 1400));
+
+        const waitForDeviceFrame = async (previousFrame: string | null) => {
+          const started = Date.now();
+          while (Date.now() - started < 5000) {
+            try {
+              const response = await fetch(`/api/device-agent/live-frame?email=${encodeURIComponent(email)}`);
+              const data = await response.json();
+              if (data?.frame) {
+                setLiveMobileFrame(data.frame);
+                if (!previousFrame || data.frame !== previousFrame) return;
+              }
+            } catch (_) {}
+            await new Promise(resolve => setTimeout(resolve, 250));
+          }
+        };
+
+        for (let i = 0; i < steps.length; i++) {
+          if (playbackCancelRef.current) return;
+          while (playbackPauseRef.current) {
+            await new Promise(resolve => setTimeout(resolve, 200));
+            if (playbackCancelRef.current) return;
+          }
+          const step = steps[i];
+          setCurrentPlaybackStepIndex(i);
+          setStepExecutionStatus(prev => ({ ...prev, [step.id]: 'running' }));
+          const coords = step.coordinates || (typeof step.x === 'number' && typeof step.y === 'number'
+            ? { x: step.x, y: step.y } : undefined);
+          const recordedBounds = (step as any).bounds;
+          const boundsMatch = typeof recordedBounds === 'string' && recordedBounds.match(/^\[(\d+),(\d+)\]\[(\d+),(\d+)\]$/);
+          const tapCoords = coords || (boundsMatch ? {
+            x: Math.round((Number(boundsMatch[1]) + Number(boundsMatch[3])) / 2),
+            y: Math.round((Number(boundsMatch[2]) + Number(boundsMatch[4])) / 2)
+          } : undefined);
+          const action = step.action === 'dblclick' ? 'double_tap' : step.action === 'click' ? 'tap' : step.action;
+          const params: any = {
+            deviceId: mobileDevice,
+            recordStep: false,
+            locator: step.locator,
+            bounds: (step as any).bounds,
+            normalizedX: (step as any).normalizedX,
+            normalizedY: (step as any).normalizedY
+          };
+          if (tapCoords) { params.x = tapCoords.x; params.y = tapCoords.y; }
+          if (action === 'fill' || action === 'type') params.text = String(step.value ?? '');
+          if (action === 'press') params.key = step.value || 'Back';
+          if (action === 'swipe' && (step as any).swipe) Object.assign(params, (step as any).swipe);
+          if (action === 'assertion' || action === 'navigate') {
+            setStepExecutionStatus(prev => ({ ...prev, [step.id]: 'passed' }));
+            continue;
+          }
+          const frameBeforeAction = liveMobileFrame;
+          await performMobileDeviceAction(email, action, params);
+          await waitForDeviceFrame(frameBeforeAction);
+          setStepExecutionStatus(prev => ({ ...prev, [step.id]: 'passed' }));
+          setStepExecutionTime(prev => ({ ...prev, [step.id]: 500 }));
+          setPlaybackLogs(prev => [...prev, {
+            timestamp: new Date().toLocaleTimeString(), level: 'success',
+            message: `✅ Device step ${i + 1}/${steps.length}: ${action.toUpperCase()} ${step.elementName || ''}`
+          }]);
+        }
+        setPlaybackStatus('completed');
+        setCurrentPlaybackStepIndex(steps.length);
+        toast.success(`Mobile playback completed for "${targetFlow.name || 'Flow'}"`);
+      } catch (error: any) {
+        setPlaybackStatus('failed');
+        toast.error(`Mobile playback failed: ${error?.message || error}`);
+      }
+      return;
+    }
 
     let currentLiveUrl = playbackActiveUrl || targetUrl;
     if (steps.length > 0) {
@@ -844,11 +869,10 @@ const RecordAndPlay: React.FC<RecordAndPlayProps> = ({ project, user, onUpdatePr
     setStepExecutionStatus(initialStatuses);
     setStepExecutionTime({});
 
-    if (firstStep.screenshot) {
-      setPlaybackStepScreenshots({ [firstStep.id]: firstStep.screenshot });
-    } else {
-      setPlaybackStepScreenshots({});
-    }
+    setPlaybackStepScreenshots({
+      ...(targetFlow.stepScreenshots || {}),
+      ...collectMobileStepScreenshots(steps).stepScreenshots
+    });
     setCompletedInputEntries([]);
 
     setPlaybackLogs(prev => [...prev, 
@@ -1302,15 +1326,7 @@ const RecordAndPlay: React.FC<RecordAndPlayProps> = ({ project, user, onUpdatePr
 
   const performLiveDeviceAction = async (action: string, params: any) => {
     try {
-      await fetch('/api/device-agent/perform-action', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          email: user?.email || 'sowbarnya@qaoncloud.com',
-          action,
-          params
-        })
-      });
+      await performMobileDeviceAction(user?.email || DEFAULT_MOBILE_USER_EMAIL, action, params);
     } catch (e) {
       console.error("Failed to post device action:", e);
     }
@@ -1320,216 +1336,12 @@ const RecordAndPlay: React.FC<RecordAndPlayProps> = ({ project, user, onUpdatePr
     if (!packageName || !mobileDevice || useDemoFallback) return;
     toast.loading(`Opening ${packageName} on your phone...`, { id: 'mobile-app-launch' });
     try {
-      const response = await fetch('/api/device-agent/perform-action', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          email: user?.email || 'sowbarnya@qaoncloud.com',
-          action: 'launch_app',
-          params: { packageName, deviceId: mobileDevice }
-        })
-      });
-      if (!response.ok) throw new Error(`Device agent returned ${response.status}`);
+      await performMobileDeviceAction(user?.email || DEFAULT_MOBILE_USER_EMAIL, 'launch_app', { packageName, deviceId: mobileDevice });
       toast.success(`Opening ${packageName} on the connected phone`, { id: 'mobile-app-launch' });
     } catch (error: any) {
       toast.error(`Could not open ${packageName}: ${error.message}`, { id: 'mobile-app-launch' });
     }
   };
-
-  const handleInspectAndRecordElement = (
-    elem: any,
-    overrideAction?: 'click' | 'fill' | 'type' | 'assertion' | 'long_press' | 'swipe' | 'press' | string,
-    overrideValue?: string,
-    event?: React.MouseEvent,
-    extraMetrics?: {
-      targetBox?: { x: number; y: number; width: number; height: number };
-      coordinates?: { x: number; y: number };
-    }
-  ) => {
-    if (!elem) return;
-
-    // Ensure recording is armed if user interacts in mobile inspector
-    if (!isRecordingRef.current) {
-      setIsRecording(true);
-      isRecordingRef.current = true;
-      setIsPaused(false);
-      isPausedRef.current = false;
-      if (!sessionIdRef.current) {
-        const newSession = `mob-${Date.now().toString(36)}-${Math.random().toString(36).substring(7)}`;
-        setSessionId(newSession);
-        sessionIdRef.current = newSession;
-      }
-    }
-
-    if (event) {
-      try {
-        const rect = (event.currentTarget as HTMLElement).getBoundingClientRect();
-        const x = event.clientX - rect.left;
-        const y = event.clientY - rect.top;
-        triggerTouchRipple(x, y);
-      } catch (e) {}
-    }
-
-    setSelectedMobileInspectorElement(elem);
-
-    let actionToRecord = overrideAction || (mobileInspectorMode === 'type' ? 'fill' : mobileInspectorMode === 'assert' ? 'assertion' : mobileInspectorMode === 'long_press' ? 'long_press' : 'click');
-    if (actionToRecord === 'type') actionToRecord = 'fill';
-
-    const valueToRecord = overrideValue !== undefined ? overrideValue : (actionToRecord === 'fill' ? (mobileInspectorInputValue || elem.text || 'Test Input Value') : (actionToRecord === 'assertion' ? (elem.text || elem.name) : (elem.text || elem.name || '')));
-
-    let primaryType: 'accessibility-id' | 'resource-id' | 'content-desc' | 'text' | 'xpath' | 'bounds' = 'resource-id';
-    let primaryValue = elem.resourceId || elem.accessibilityId || elem.text || elem.xpath || '';
-
-    if (elem.resourceId) {
-      primaryType = 'resource-id';
-      primaryValue = elem.resourceId;
-    } else if (elem.accessibilityId) {
-      primaryType = 'accessibility-id';
-      primaryValue = elem.accessibilityId;
-    } else if (elem.contentDescription) {
-      primaryType = 'content-desc';
-      primaryValue = elem.contentDescription;
-    } else if (elem.text) {
-      primaryType = 'text';
-      primaryValue = elem.text;
-    } else if (elem.xpath) {
-      primaryType = 'xpath';
-      primaryValue = elem.xpath;
-    } else {
-      primaryType = 'xpath';
-      primaryValue = `//*[contains(@text, '${elem.name || 'element'}')]`;
-    }
-
-    let playwrightCode = '';
-    if (actionToRecord === 'click') {
-      if (primaryType === 'resource-id') {
-        playwrightCode = `// Tap ${elem.name || primaryValue}\nawait driver.elementById("${primaryValue}").click();`;
-      } else if (primaryType === 'accessibility-id') {
-        playwrightCode = `// Tap ${elem.name || primaryValue}\nawait driver.elementByAccessibilityId("${primaryValue}").click();`;
-      } else {
-        playwrightCode = `// Tap ${elem.name || primaryValue}\nconst el = await driver.elementByXPath("${elem.xpath || `//*[@text='${primaryValue}']`}");\nawait el.click();`;
-      }
-    } else if (actionToRecord === 'fill') {
-      if (primaryType === 'resource-id') {
-        playwrightCode = `// Type into ${elem.name || primaryValue}\nawait driver.elementById("${primaryValue}").type("${valueToRecord}");`;
-      } else {
-        playwrightCode = `// Type into ${elem.name || primaryValue}\nconst el = await driver.elementByXPath("${elem.xpath || `//*[@text='${primaryValue}']`}");\nawait el.sendKeys("${valueToRecord}");`;
-      }
-    } else if (actionToRecord === 'assertion') {
-      playwrightCode = `// Assert ${elem.name || primaryValue} is visible\nconst el = await driver.elementByXPath("${elem.xpath || `//*[@text='${primaryValue}']`}");\nexpect(await el.isDisplayed()).toBe(true);`;
-    } else if (actionToRecord === 'long_press') {
-      playwrightCode = `// Long press ${elem.name || primaryValue}\nconst el = await driver.elementByXPath("${elem.xpath || `//*[@text='${primaryValue}']`}");\nawait new TouchAction(driver).longPress({ element: el, duration: 1500 }).release().perform();`;
-    } else if (actionToRecord === 'swipe') {
-      playwrightCode = `// Swipe gesture\nawait driver.touchPerform([{ action: 'press', options: { x: 100, y: 500 } }, { action: 'wait', options: { ms: 1000 } }, { action: 'moveTo', options: { x: 100, y: 100 } }, { action: 'release' }]);`;
-    } else if (actionToRecord === 'press') {
-      playwrightCode = `// Press key\nawait driver.pressKeyCode(${valueToRecord === 'Back' ? 4 : valueToRecord === 'Home' ? 3 : 187});`;
-    }
-
-    const elemName = elem.name || elem.text || primaryValue || 'Mobile Element';
-    const payload: any = {
-      action: actionToRecord,
-      value: valueToRecord,
-      elementName: elemName,
-      locator: {
-        primary: {
-          type: primaryType,
-          value: primaryValue,
-          playwright: playwrightCode,
-          bounds: elem.bounds
-        },
-        alternatives: [
-          elem.resourceId ? { type: 'resource-id', value: elem.resourceId } : null,
-          elem.accessibilityId ? { type: 'accessibility-id', value: elem.accessibilityId } : null,
-          elem.contentDescription ? { type: 'content-desc', value: elem.contentDescription } : null,
-          elem.text ? { type: 'text', value: elem.text } : null,
-          elem.xpath ? { type: 'xpath', value: elem.xpath } : null
-        ].filter(Boolean)
-      },
-      screen: (mobileActiveAppTab || mobileAppScreen || 'MAIN').toUpperCase(),
-      platform: 'mobile',
-      bounds: elem.bounds,
-      targetBox: extraMetrics?.targetBox,
-      coordinates: extraMetrics?.coordinates,
-      x: extraMetrics?.coordinates?.x,
-      y: extraMetrics?.coordinates?.y,
-      timestamp: Date.now()
-    };
-
-    addRecordedStep(payload);
-
-    const timestampStr = new Date().toLocaleTimeString();
-    logAdb(`[${timestampStr}] [ADB] input event "${actionToRecord}" on target [${elemName}]`);
-    logAdb(`[${timestampStr}] [Appium] findElement(${primaryType}, "${primaryValue}") -> ${actionToRecord}`);
-    if (valueToRecord) {
-      logAdb(`[${timestampStr}] [Appium] setValue -> "${valueToRecord}"`);
-    }
-    
-    // Also dispatch the physical action to the agent. The agent executes ADB
-    // taps by coordinates, so never queue a locator-only tap with undefined x/y.
-    const boundsMatch = elem.bounds?.match(/^\[(\d+),(\d+)\]\[(\d+),(\d+)\]$/);
-    const tapX = boundsMatch ? Math.round((Number(boundsMatch[1]) + Number(boundsMatch[3])) / 2) : undefined;
-    const tapY = boundsMatch ? Math.round((Number(boundsMatch[2]) + Number(boundsMatch[4])) / 2) : undefined;
-    if (liveMobileFrame && tapX !== undefined && tapY !== undefined) {
-      performLiveDeviceAction('tap', {
-        x: tapX,
-        y: tapY,
-        resourceId: elem.resourceId,
-        xpath: elem.xpath,
-        bounds: elem.bounds
-      });
-    }
-
-    toast.success(`[+] Recorded Step: ${actionToRecord.toUpperCase()} "${elemName}"`);
-  };
-
-  useEffect(() => {
-    let interval: any = null;
-    if (platform === 'mobile') {
-      interval = setInterval(async () => {
-        try {
-          const userEmail = encodeURIComponent(user?.email || 'sowbarnya@qaoncloud.com');
-          // Socket.IO is the primary live stream. Polling at the same time causes
-          // redundant frame swaps and visible flicker on Linux/Chromium.
-          if (!socketRef.current?.connected) {
-            const res = await fetch(`/api/device-agent/live-frame?email=${userEmail}`);
-            if (res.ok && res.headers.get('content-type')?.includes('application/json')) {
-              const data = await res.json();
-              if (data.success && data.frame) {
-                setLiveMobileFrame(current => current === data.frame ? current : data.frame);
-                setMobileError(null);
-              } else if (data.error && typeof data.error === 'string' && data.error.includes("Appium")) {
-                setMobileError("Unable to start Appium. Verify Appium installation and Device Agent status.");
-              }
-            }
-          }
-
-          // Real-time synchronization of physical emulator steps
-          if (isRecordingRef.current) {
-            const stepsRes = await fetch(`/api/mobile/session/steps?email=${userEmail}`);
-            if (stepsRes.ok) {
-              const stepsData = await stepsRes.json();
-              if (stepsData.success && Array.isArray(stepsData.steps) && stepsData.steps.length > 0) {
-                setCurrentSteps(prev => {
-                  const existingIds = new Set(prev.map(s => s.id));
-                  const newSteps = stepsData.steps.filter((s: any) => !existingIds.has(s.id));
-                  if (newSteps.length > 0) {
-                    console.log(`[Mobile Sync] Polled and merged ${newSteps.length} physical emulator steps.`);
-                    return [...prev, ...newSteps];
-                  }
-                  return prev;
-                });
-              }
-            }
-          }
-        } catch (e) {
-          // Silently ignore network polling blips
-        }
-      }, 600);
-    }
-    return () => {
-      if (interval) clearInterval(interval);
-    };
-  }, [platform, localAgentState, useDemoFallback, mobileDevice, user?.email]);
 
   // Check local agent status on localhost:4545 or cloud daemon
   const checkLocalAgent = async () => {
@@ -1870,6 +1682,16 @@ const RecordAndPlay: React.FC<RecordAndPlayProps> = ({ project, user, onUpdatePr
   const isRecordingRef = useRef(false);
   const isPausedRef = useRef(false);
   const sessionIdRef = useRef<string | null>(null);
+
+  useMobileRecordingSync({
+    enabled: platform === 'mobile',
+    email: user?.email || DEFAULT_MOBILE_USER_EMAIL,
+    recordingRef: isRecordingRef,
+    socketRef,
+    setSteps: setCurrentSteps,
+    setFrame: setLiveMobileFrame,
+    setError: setMobileError
+  });
   
   // Initialize currentSteps from localStorage if available
   useEffect(() => {
@@ -1918,10 +1740,14 @@ const RecordAndPlay: React.FC<RecordAndPlayProps> = ({ project, user, onUpdatePr
   
   useEffect(() => {
     console.log("Recorded steps state updated:", currentSteps.length);
-    if (currentSteps.length > 0) {
-      localStorage.setItem('automatiqa_recorded_steps', JSON.stringify(currentSteps));
-    } else {
-      localStorage.removeItem('automatiqa_recorded_steps');
+    try {
+      if (currentSteps.length > 0) {
+        localStorage.setItem('automatiqa_recorded_steps', serializeStepsForLocalRecovery(currentSteps));
+      } else {
+        localStorage.removeItem('automatiqa_recorded_steps');
+      }
+    } catch (error) {
+      console.warn('Could not persist local recording recovery state:', error);
     }
   }, [currentSteps]);
 
@@ -2068,6 +1894,12 @@ const RecordAndPlay: React.FC<RecordAndPlayProps> = ({ project, user, onUpdatePr
 
     setCurrentSteps(prev => {
       const lastStep = prev[prev.length - 1];
+
+      // Socket delivery and polling are redundant transports by design. Keep
+      // the stable agent event ID so the same physical touch is merged once.
+      if (eventData.id && prev.some(step => step.id === eventData.id)) {
+        return prev;
+      }
       
       // Avoid immediate identical navigate events to the same URL
       if (lastStep && lastStep.action === 'navigate' && eventData.action === 'navigate') {
@@ -2127,7 +1959,9 @@ const RecordAndPlay: React.FC<RecordAndPlayProps> = ({ project, user, onUpdatePr
       }
 
       const step: RecordedStep = {
-        id: Math.random().toString(36).substring(7),
+        // Socket.io and polling may deliver the same device event. Preserve
+        // its stable ID so the second transport is cleanly deduplicated.
+        id: eventData.id || Math.random().toString(36).substring(7),
         action: eventData.action === 'type' ? 'fill' : eventData.action,
         value: eventData.value,
         elementName: eventData.elementName,
@@ -2152,6 +1986,13 @@ const RecordAndPlay: React.FC<RecordAndPlayProps> = ({ project, user, onUpdatePr
         originalValue: eventData.originalValue,
         coordinates: eventData.coordinates || (typeof eventData.x === 'number' && typeof eventData.y === 'number' ? { x: eventData.x, y: eventData.y } : undefined),
         targetBox: eventData.targetBox,
+        bounds: eventData.bounds,
+        node: eventData.node,
+        target: eventData.target || eventData.node,
+        screenWidth: eventData.screenWidth,
+        screenHeight: eventData.screenHeight,
+        normalizedX: eventData.normalizedX,
+        normalizedY: eventData.normalizedY,
         screenshot: eventData.screenshot || eventData.image,
         x: eventData.x,
         y: eventData.y,
@@ -2163,6 +2004,26 @@ const RecordAndPlay: React.FC<RecordAndPlayProps> = ({ project, user, onUpdatePr
       return [...prev, step];
     });
   };
+
+  const handleInspectAndRecordElement = useMobileStepCapture({
+    email: user?.email || DEFAULT_MOBILE_USER_EMAIL,
+    recordingRef: isRecordingRef,
+    pausedRef: isPausedRef,
+    sessionRef: sessionIdRef,
+    setRecording: setIsRecording,
+    setPaused: setIsPaused,
+    setSessionId,
+    setSteps: setCurrentSteps,
+    addStep: addRecordedStep,
+    setSelectedElement: setSelectedMobileInspectorElement,
+    triggerRipple: triggerTouchRipple,
+    log: logAdb,
+    inspectorMode: mobileInspectorMode,
+    inspectorValue: mobileInspectorInputValue,
+    activeScreen: mobileActiveAppTab || mobileAppScreen || 'MAIN',
+    liveFrame: liveMobileFrame,
+    captureScreenshots
+  });
 
   const handleApkUpload = async (file: File) => {
     setMobileApkFile(file);
@@ -2368,6 +2229,8 @@ const RecordAndPlay: React.FC<RecordAndPlayProps> = ({ project, user, onUpdatePr
 
     socket.on('RECORDED_STEP', (payload: any) => {
       console.log('Received RECORDED_STEP from socket:', payload);
+      const currentUserEmail = (user?.email || 'sowbarnya@qaoncloud.com').toLowerCase();
+      if (payload?.__userEmail && String(payload.__userEmail).toLowerCase() !== currentUserEmail) return;
       addRecordedStep(payload);
     });
 
@@ -2580,7 +2443,7 @@ const RecordAndPlay: React.FC<RecordAndPlayProps> = ({ project, user, onUpdatePr
       setIsStartModalOpen(false);
 
       // Step 1: Resolve target package & application metadata
-      let targetPkg = (mobileAppType === 'installed' ? (mobileInstalledApp || 'org.fdroid.fdroid') : (mobilePackageName || 'org.fdroid.fdroid'));
+      let targetPkg = mobileAppType === 'installed' ? mobileInstalledApp : mobilePackageName;
       if (mobileAppType === 'apk') {
         if (mobilePackageName && mobilePackageName !== 'com.uploaded.apk') {
           targetPkg = mobilePackageName;
@@ -2596,6 +2459,11 @@ const RecordAndPlay: React.FC<RecordAndPlayProps> = ({ project, user, onUpdatePr
           else if (detected === 'health_insurance') targetPkg = 'com.nivabupa.health';
           else if (detected === 'qalculate') targetPkg = 'com.qalculate.android';
         }
+      }
+      if (!targetPkg) {
+        toast.error('Select an installed app or enter a package name before recording.');
+        setIsStarting(false);
+        return;
       }
       setMobilePackageName(targetPkg);
       setMobileInstalledApp(targetPkg);
@@ -2649,11 +2517,7 @@ const RecordAndPlay: React.FC<RecordAndPlayProps> = ({ project, user, onUpdatePr
       if (!useDemoFallback) {
         try {
           const userEmail = user?.email || 'sowbarnya@qaoncloud.com';
-          await fetch('/api/mobile/session/clear-steps', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ email: userEmail })
-          }).catch(() => {});
+          await clearMobileSessionSteps(userEmail).catch(() => {});
 
           // Stop previous app & launch new app package
           await fetch('/api/mobile/app/launch', {
@@ -2669,18 +2533,10 @@ const RecordAndPlay: React.FC<RecordAndPlayProps> = ({ project, user, onUpdatePr
           }).catch(() => {});
 
           // Also queue perform-action for physical/local agent
-          await fetch('/api/device-agent/perform-action', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              email: userEmail,
-              action: 'launch_app',
-              params: {
-                packageName: targetPkg,
-                launchActivity: mobileAppActivity || '.MainActivity',
-                deviceId: activeDeviceName
-              }
-            })
+          await performMobileDeviceAction(userEmail, 'launch_app', {
+            packageName: targetPkg,
+            launchActivity: mobileAppActivity || '.MainActivity',
+            deviceId: activeDeviceName
           }).catch(() => {});
         } catch (e: any) {
           console.warn("Mobile session launch notice:", e);
@@ -2747,6 +2603,7 @@ const RecordAndPlay: React.FC<RecordAndPlayProps> = ({ project, user, onUpdatePr
         },
         screen: "MainPage",
         platform: 'mobile',
+        screenshot: captureScreenshots ? liveMobileFrame || undefined : undefined,
         timestamp: Date.now()
       };
 
@@ -3130,7 +2987,8 @@ const RecordAndPlay: React.FC<RecordAndPlayProps> = ({ project, user, onUpdatePr
           url: stepTargetUrl,
           action: step.action,
           selector: (step as any).selector || step.locator?.primary?.value || '',
-          locator: step.locator,
+            locator: step.locator,
+            target: (step as any).target || (step as any).node,
           elementName: step.elementName || '',
           screen: step.screen || '',
           sessionId: sessionId || ''
@@ -3541,17 +3399,25 @@ const RecordAndPlay: React.FC<RecordAndPlayProps> = ({ project, user, onUpdatePr
     const finalFolderName = selectedFolderObj?.name || (isCreatingNewFlowFolder ? newFlowFolderName.trim() : undefined);
 
     const platformCurrentSteps = currentSteps.filter(s => (s.platform || 'web') === platform);
+    const flowSteps = platformCurrentSteps.length > 0 ? platformCurrentSteps : currentSteps;
+    const mobileEvidence = platform === 'mobile' ? collectMobileStepScreenshots(flowSteps) : undefined;
 
     const newFlow: RecordedFlow = {
       id: activeFlowId || Math.random().toString(36).substr(2, 9),
       name: flowName,
       description: flowDescription,
       refineInstructions: refineInstructions,
-      steps: platformCurrentSteps.length > 0 ? platformCurrentSteps : currentSteps,
+      steps: flowSteps,
       createdAt: new Date().toISOString(),
       isApproved,
       folderId: finalFolderId,
-      platform: platform
+      platform: platform,
+      screenshots: mobileEvidence?.screenshots,
+      stepScreenshots: mobileEvidence?.stepScreenshots,
+      mobilePackageName: platform === 'mobile' ? mobilePackageName : undefined,
+      mobileAppName: platform === 'mobile'
+        ? availableApps.find(app => (app.package || app.packageName) === mobilePackageName)?.name
+        : undefined
     };
 
     const currentFlowList = (project.recordedFlows && project.recordedFlows.length > 0) ? project.recordedFlows : flows;
@@ -5679,7 +5545,9 @@ ${currentSteps.map(step => formatStepToScript(step, 'web')).join('\n')}
                               {step.action === 'fill' ? (
                                  <span>Entered {step.masked ? <span className="text-amber-400 font-bold">SENSITIVE DATA ({step.placeholder})</span> : `"${step.value}"`} in "{step.elementName || step.locator.primary.value}"</span>
                                ) :
-                               step.action === 'click' ? `Clicked "${step.elementName || step.locator.primary.value}"` :
+                               step.action === 'click' ? (step.platform === 'mobile'
+                                 ? `Touched "${step.elementName || step.locator.primary.value}" element`
+                                 : `Clicked "${step.elementName || step.locator.primary.value}"`) :
                                step.action === 'navigate' ? `Redirected to "${step.value}"` :
                                step.action === 'upload' ? `Uploaded to "${step.elementName || step.locator.primary.value}": ${step.value}` :
                                step.action === 'scroll' ? `Scrolled page` :
@@ -8111,9 +7979,12 @@ ${currentSteps.map(step => formatStepToScript(step, 'web')).join('\n')}
                         cursorPos={cursorPos}
                         isClicking={isClicking}
                         activeTypingText={activeTypingText}
-                        stepScreenshots={playbackStepScreenshots}
-                        viewMode={playbackViewMode === 'screenshot' ? 'screenshot' : 'interactive'}
-                        onToggleViewMode={(m) => setPlaybackViewMode(m === 'screenshot' ? 'screenshot' : 'iframe')}
+                        // Mobile playback is a live device run; never render
+                        // the old screenshot replay/simulation path.
+                        stepScreenshots={{}}
+                        liveFrame={liveMobileFrame}
+                        viewMode="interactive"
+                        onToggleViewMode={undefined}
                         showInteractionOverlay={showInteractionOverlay}
                       />
 

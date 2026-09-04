@@ -4302,14 +4302,21 @@ export const MobileRecordingInspector: React.FC<MobileRecordingInspectorProps> =
         y: Number(((deviceY / naturalHeight) * 100).toFixed(1))
       }
     };
+
+    // Start resolving the hierarchy before dispatching the tap. The action can
+    // immediately mutate Upload -> Update or Like -> Liked, and the recorded
+    // name must describe the control the user actually pressed.
+    const email = encodeURIComponent(mobileUserEmail || 'shanmugapriya@qaoncloud.com');
+    const preActionHierarchy = fetch(`/api/mobile/app/source?email=${email}`).then(async response => ({
+      response,
+      payload: await response.json()
+    }));
     setSelectedElement(coordinateElem);
     onRecordElement(coordinateElem, action, inspectorMode === 'type' ? inspectorInputText : undefined, e, coordinateMetrics);
 
     // Locator enrichment is best-effort and must never gate step capture.
     try {
-      const email = encodeURIComponent(mobileUserEmail || 'shanmugapriya@qaoncloud.com');
-      const response = await fetch(`/api/mobile/app/source?email=${email}`);
-      const payload = await response.json();
+      const { response, payload } = await preActionHierarchy;
       if (!response.ok || !payload.success || !payload.xml) {
         throw new Error(payload.error || 'UI hierarchy is unavailable');
       }

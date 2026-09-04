@@ -493,6 +493,13 @@ export interface RecordedStep {
   x?: number;
   y?: number;
   coordinates?: { x: number; y: number };
+  bounds?: string | { left: number; top: number; right: number; bottom: number };
+  node?: Record<string, any>;
+  target?: Record<string, any>;
+  screenWidth?: number;
+  screenHeight?: number;
+  normalizedX?: number;
+  normalizedY?: number;
   targetBox?: { x: number; y: number; width: number; height: number };
   frameInfo?: FrameInfo;
   pageIndex?: number;
