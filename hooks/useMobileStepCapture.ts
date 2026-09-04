@@ -1,7 +1,7 @@
 import { Dispatch, MouseEvent, MutableRefObject, SetStateAction, useCallback } from 'react';
 import { toast } from 'sonner';
 import { RecordedStep } from '../types';
-import { performMobileDeviceAction } from '../services/mobileRecordingService';
+import { getMobileLiveFrame, performMobileDeviceAction } from '../services/mobileRecordingService';
 import { buildMobileRecordedStep, MobileStepMetrics } from '../utils/mobileRecordingSteps';
 
 interface MobileStepCaptureOptions {
@@ -91,8 +91,28 @@ export function useMobileStepCapture(options: MobileStepCaptureOptions) {
     if (!metrics?.recordOnly && options.liveFrame && bounds) {
       const x = Math.round((Number(bounds[1]) + Number(bounds[3])) / 2);
       const y = Math.round((Number(bounds[2]) + Number(bounds[4])) / 2);
+      const beforeFrame = options.liveFrame;
       void performMobileDeviceAction(options.email, 'tap', {
         x, y, resourceId: elem.resourceId, xpath: elem.xpath, bounds: elem.bounds, recordStep: false
+      }).then(async () => {
+        if (!options.captureScreenshots) return;
+        // Store post-action evidence. The previous implementation attached the
+        // frame from before the tap, which made playback comparisons misleading.
+        const started = Date.now();
+        let capturedFrame: string | undefined;
+        while (Date.now() - started < 5000) {
+          const response: { frame?: string } = await getMobileLiveFrame(options.email).catch(() => ({}));
+          if (response.frame) {
+            capturedFrame = response.frame;
+            if (response.frame !== beforeFrame) break;
+          }
+          await new Promise(resolve => setTimeout(resolve, 250));
+        }
+        if (capturedFrame) {
+          options.setSteps(previous => previous.map(item => item.id === step.id
+            ? { ...item, screenshot: capturedFrame }
+            : item));
+        }
       }).catch(error => console.error('Failed to post device action:', error));
     }
     toast.success(`[+] Recorded Step: ${action.toUpperCase()} "${step.elementName}"`);

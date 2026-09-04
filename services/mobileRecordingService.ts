@@ -41,3 +41,11 @@ export async function clearMobileSessionSteps(email: string) {
     body: JSON.stringify({ email })
   }));
 }
+
+export async function startMobileRecordingSession(email: string, deviceId: string, sessionId: string) {
+  return readJson(await fetch('/api/mobile/session/start', {
+    method: 'POST',
+    headers: jsonHeaders,
+    body: JSON.stringify({ email, deviceId, sessionId })
+  }));
+}

@@ -4623,6 +4623,15 @@ export const MobileRecordingInspector: React.FC<MobileRecordingInspectorProps> =
                   draggable={false}
                 />
               )}
+              {!liveMobileFrame && isRecording && (
+                <div className="absolute inset-0 z-[90] bg-slate-950 flex flex-col items-center justify-center gap-3 px-8 text-center">
+                  <RotateCcw size={24} className="text-emerald-400 animate-spin" />
+                  <p className="text-xs font-black text-white uppercase tracking-wider">Waiting for live device screen</p>
+                  <p className="text-[10px] text-slate-400 leading-relaxed">
+                    The recorder will show the phone’s current screen when the next genuine device frame arrives.
+                  </p>
+                </div>
+              )}
               
               {/* Android Status Bar */}
               <div className="pt-2 px-5 pb-1 flex items-center justify-between text-[10px] font-bold text-slate-400 bg-slate-950/90 z-20">

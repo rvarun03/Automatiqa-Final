@@ -9656,6 +9656,7 @@ async function recordTokenLogServer(params: {
 
   const activeMobileSessions = new Map<string, ActiveMobileSession>();
   const pendingActionsMap = new Map<string, Array<{ id: string; action: string; params: any; timestamp: number }>>();
+  const mobileActionResults = new Map<string, { success: boolean; error?: string; completedAt: number }>();
 
   function generateDefaultAppFrame(packageName?: string, appTitle?: string): string {
     let title = appTitle;
@@ -10258,14 +10259,28 @@ pause
     if (!pendingActionsMap.has(queueEmail)) {
       pendingActionsMap.set(queueEmail, []);
     }
+    const actionId = Math.random().toString(36).substring(7);
     pendingActionsMap.get(queueEmail)!.push({
-      id: Math.random().toString(36).substring(7),
+      id: actionId,
       action: action || 'tap',
       params: params || {},
       timestamp: Date.now()
     });
 
-    res.json({ success: true, message: `Action ${action} queued for agent` });
+    res.json({ success: true, actionId, message: `Action ${action} queued for agent` });
+  });
+
+  app.post("/api/device-agent/action-result", (req, res) => {
+    const { actionId, success, error } = req.body || {};
+    if (!actionId) return res.status(400).json({ success: false, error: 'actionId is required' });
+    mobileActionResults.set(actionId, { success: success !== false, error, completedAt: Date.now() });
+    res.json({ success: true });
+  });
+
+  app.get("/api/device-agent/action-result/:actionId", (req, res) => {
+    const result = mobileActionResults.get(req.params.actionId);
+    if (result) mobileActionResults.delete(req.params.actionId);
+    res.json({ success: true, completed: !!result, result: result || null });
   });
 
   // Poll Pending Actions for Agent
@@ -10348,6 +10363,32 @@ pause
       session.recordedSteps = [];
     }
     res.json({ success: true });
+  });
+
+  // Start recording against the device's current state. Unlike app/launch,
+  // this creates the event sink without queuing any ADB navigation command.
+  app.post("/api/mobile/session/start", (req, res) => {
+    const { email, deviceId, sessionId } = req.body || {};
+    const userEmail = (email || "sowbarnya@qaoncloud.com").toLowerCase();
+    const previous = activeMobileSessions.get(userEmail);
+    const agent = getMobileAgent(userEmail);
+    const session: ActiveMobileSession = {
+      email: userEmail,
+      deviceId: deviceId || previous?.deviceId || agent?.devices?.[0]?.deviceId || 'emulator-5554',
+      packageName: previous?.packageName,
+      launchActivity: previous?.launchActivity,
+      status: 'RUNNING',
+      lastFrame: previous?.lastFrame || (agent as any)?.lastFrame,
+      pageSourceXml: previous?.pageSourceXml,
+      logs: [{
+        timestamp: new Date().toLocaleTimeString(),
+        level: 'INFO',
+        message: `Recording session ${sessionId || 'current'} attached without changing device state`
+      }],
+      recordedSteps: []
+    };
+    activeMobileSessions.set(userEmail, session);
+    res.json({ success: true, sessionId, session });
   });
 
   // Update Agent Status

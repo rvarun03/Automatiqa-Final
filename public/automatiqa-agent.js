@@ -829,6 +829,10 @@ async function handleHardwareKeyPress(deviceId, keyName, keycode) {
       skipForegroundMismatch(`hardware key "${keyName}"`);
       return;
     }
+    // The key event has already occurred when getevent reaches this handler;
+    // capture the resulting screen for later playback verification.
+    await new Promise(resolve => setTimeout(resolve, 250));
+    const postActionScreenshot = await captureScreenshot(deviceId).catch(() => null);
     const stepPayload = {
       email: userEmail,
       event: {
@@ -846,7 +850,8 @@ async function handleHardwareKeyPress(deviceId, keyName, keycode) {
         },
         screen: "ActiveScreen",
         platform: 'mobile',
-        timestamp: Date.now()
+        timestamp: Date.now(),
+        screenshot: postActionScreenshot || lastCapturedFrame
       }
     };
 
@@ -928,9 +933,8 @@ async function handlePhysicalEmulatorTap(deviceId, x, y, elementPromise, touchDo
           bounds: locatorAttr.bounds
         } : undefined,
         bounds: locatorAttr?.bounds,
-        // Playback must show what the user saw before the action mutated the
-        // label/screen (for example Upload -> Update or Like -> Liked).
-        screenshot: preActionScreenshot || freshScreenshot,
+        // Playback verification needs the state produced by this action.
+        screenshot: freshScreenshot || preActionScreenshot,
         timestamp: Date.now()
       }
     };
@@ -960,7 +964,10 @@ async function handlePhysicalEmulatorSwipe(deviceId, x1, y1, x2, y2, duration, e
       skipForegroundMismatch(`physical swipe at (${x1},${y1}) -> (${x2},${y2})`);
       return;
     }
-    const locatorAttr = await Promise.resolve(elementPromise).catch(() => null);
+    const [locatorAttr, postActionScreenshot] = await Promise.all([
+      Promise.resolve(elementPromise).catch(() => null),
+      captureScreenshot(deviceId).catch(() => null)
+    ]);
     const screenWidth = touchDeviceBounds.displayWidth;
     const screenHeight = touchDeviceBounds.displayHeight;
     const stepPayload = {
@@ -983,7 +990,7 @@ async function handlePhysicalEmulatorSwipe(deviceId, x1, y1, x2, y2, duration, e
         normalizedX2: x2 / screenWidth,
         normalizedY2: y2 / screenHeight,
         bounds: locatorAttr?.bounds,
-        screenshot: touchDownScreenshot || lastCapturedFrame,
+        screenshot: postActionScreenshot || touchDownScreenshot || lastCapturedFrame,
         timestamp: Date.now()
       }
     };
@@ -1282,7 +1289,7 @@ async function startStreamingAndCommandPolling() {
             // Do not await the hierarchy lookup before dispatching the action.
             // That lookup is intentionally a pre-action snapshot; waiting here
             // lets a stale cached dump win and delays the actual tap.
-            await runCmd(cmd);
+            const commandResult = await runCmd(cmd);
 
             // Resolve the node after the ADB command has already been sent. The
             // promise started before the tap, so it describes the tapped screen.
@@ -1302,7 +1309,14 @@ async function startStreamingAndCommandPolling() {
 
             // Browser-inspector taps are recorded before dispatch so the UI is
             // responsive. In that case only execute the ADB action here.
-            if (params.recordStep === false) continue;
+            if (params.recordStep === false) {
+              await postJson(`${serverUrl}/api/device-agent/action-result`, {
+                actionId: item.id,
+                success: commandResult?.success !== false,
+                error: commandResult?.success === false ? (commandResult.stderr || commandResult.stdout || `ADB ${action} command failed`) : undefined
+              }).catch(() => {});
+              continue;
+            }
 
             const labelName = getAndroidElementName(locatorAttr) || 'Screen position';
             const stepPayload = {
