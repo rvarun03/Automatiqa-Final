@@ -608,6 +608,20 @@ async function startAdbTouchListener(deviceId) {
   let lastRecordedTime = 0;
   let elementAtTouchStart = null;
   let screenshotAtTouchStart = null;
+  let gestureStartRawX = null;
+  let gestureStartRawY = null;
+  let gestureStartedAt = 0;
+
+  const beginTouch = () => {
+    if (isTouching) return;
+    isTouching = true;
+    // Coordinates reported before TRACKING_ID/DOWN belong to the prior touch
+    // on several Android drivers. Latch only values emitted during this touch.
+    gestureStartRawX = null;
+    gestureStartRawY = null;
+    gestureStartedAt = Date.now();
+    screenshotAtTouchStart = lastCapturedFrame;
+  };
 
   try {
     touchListenerProcess = spawn('adb', ['-s', deviceId, 'shell', 'getevent', '-l']);
@@ -630,6 +644,7 @@ async function startAdbTouchListener(deviceId) {
           if (!isNaN(val)) {
             currentRawX = val;
             lastSeenRawX = val;
+            if (isTouching && gestureStartRawX === null) gestureStartRawX = val;
             if (currentRawX > touchDeviceBounds.touchMaxX && touchDeviceBounds.touchMaxX <= touchDeviceBounds.displayWidth) {
               touchDeviceBounds.touchMaxX = Math.max(32767, currentRawX);
             }
@@ -643,6 +658,7 @@ async function startAdbTouchListener(deviceId) {
           if (!isNaN(val)) {
             currentRawY = val;
             lastSeenRawY = val;
+            if (isTouching && gestureStartRawY === null) gestureStartRawY = val;
             if (currentRawY > touchDeviceBounds.touchMaxY && touchDeviceBounds.touchMaxY <= touchDeviceBounds.displayHeight) {
               touchDeviceBounds.touchMaxY = Math.max(32767, currentRawY);
             }
@@ -661,13 +677,11 @@ async function startAdbTouchListener(deviceId) {
         }
         // Many Android touch drivers report tracking IDs without BTN_TOUCH.
         else if ((line.includes('ABS_MT_TRACKING_ID') || line.includes('0039 ')) && !line.includes('ffffffff')) {
-          isTouching = true;
-          screenshotAtTouchStart = lastCapturedFrame;
+          beginTouch();
         }
         // Touch / Mouse Down
         else if ((line.includes('BTN_TOUCH') || line.includes('BTN_LEFT') || line.includes('BTN_MOUSE')) && line.includes('DOWN')) {
-          isTouching = true;
-          screenshotAtTouchStart = lastCapturedFrame;
+          beginTouch();
           const rawX = currentRawX !== null ? currentRawX : lastSeenRawX;
           const rawY = currentRawY !== null ? currentRawY : lastSeenRawY;
           if (rawX !== null && rawY !== null) {
@@ -720,7 +734,19 @@ async function startAdbTouchListener(deviceId) {
                 const capturedScreenshot = screenshotAtTouchStart;
                 elementAtTouchStart = null;
                 screenshotAtTouchStart = null;
-                handlePhysicalEmulatorTap(deviceId, screenX, screenY, capturedElement, capturedScreenshot);
+                const rawStartX = gestureStartRawX === null ? targetX : gestureStartRawX;
+                const rawStartY = gestureStartRawY === null ? targetY : gestureStartRawY;
+                const startX = touchDeviceBounds.touchMaxX > touchDeviceBounds.displayWidth
+                  ? Math.round((rawStartX / touchDeviceBounds.touchMaxX) * touchDeviceBounds.displayWidth) : rawStartX;
+                const startY = touchDeviceBounds.touchMaxY > touchDeviceBounds.displayHeight
+                  ? Math.round((rawStartY / touchDeviceBounds.touchMaxY) * touchDeviceBounds.displayHeight) : rawStartY;
+                gestureStartRawX = null;
+                gestureStartRawY = null;
+                if (Math.hypot(screenX - startX, screenY - startY) >= 30) {
+                  handlePhysicalEmulatorSwipe(deviceId, startX, startY, screenX, screenY, Math.max(100, Date.now() - gestureStartedAt), capturedElement, capturedScreenshot);
+                } else {
+                  handlePhysicalEmulatorTap(deviceId, screenX, screenY, capturedElement, capturedScreenshot);
+                }
               }
             }
           }
@@ -878,6 +904,30 @@ async function handlePhysicalEmulatorTap(deviceId, x, y, elementPromise, touchDo
 
   } catch (err) {
     console.error('Failed to handle physical tap:', err.message);
+  }
+}
+
+async function handlePhysicalEmulatorSwipe(deviceId, x1, y1, x2, y2, duration, elementPromise, touchDownScreenshot) {
+  try {
+    if (!isTargetInForeground()) {
+      skipForegroundMismatch(`physical swipe at (${x1},${y1}) -> (${x2},${y2})`);
+      return;
+    }
+    const locatorAttr = await Promise.resolve(elementPromise).catch(() => null);
+    const screenWidth = touchDeviceBounds.displayWidth;
+    const screenHeight = touchDeviceBounds.displayHeight;
+    const stepPayload = { email: userEmail, event: {
+      id: Math.random().toString(36).substring(7), action: 'swipe', value: 'Swipe gesture', elementName: 'Swipe gesture',
+      locator: { primary: { type: 'coordinates', value: JSON.stringify({ x1, y1, x2, y2, unit: 'pixels' }) }, alternatives: [] },
+      platform: 'mobile', screen: 'ActiveScreen', x1, y1, x2, y2, duration, screenWidth, screenHeight,
+      normalizedX1: x1 / screenWidth, normalizedY1: y1 / screenHeight, normalizedX2: x2 / screenWidth, normalizedY2: y2 / screenHeight,
+      bounds: locatorAttr?.bounds, screenshot: touchDownScreenshot || lastCapturedFrame, timestamp: Date.now()
+    }};
+    console.log(`[Recorder][Swipe] (${x1},${y1}) -> (${x2},${y2}) in ${duration}ms`);
+    await postJson(`${serverUrl}/api/device-agent/record-event`, stepPayload);
+    await postJson(`${serverUrl}/api/mobile/agent/record-event`, stepPayload);
+  } catch (err) {
+    console.error(`[Recorder][Swipe] Failed: ${err.message}`);
   }
 }
 
@@ -1074,10 +1124,31 @@ async function startStreamingAndCommandPolling() {
           } else if (action === 'clear') {
             cmd = `adb -s ${actionDeviceId} shell input keyevent 67`.repeat(25).replace(/adb/g, '&& adb').substring(3);
           } else if (action === 'swipe' || action === 'scroll') {
-            cmd = `adb -s ${actionDeviceId} shell input swipe ${params.x1} ${params.y1} ${params.x2} ${params.y2} ${params.duration || 300}`;
+            const gesture = params.swipe || params;
+            const asNumber = value => value === null || value === undefined || value === '' ? NaN : Number(value);
+            const recordedX1 = asNumber(gesture.x1 ?? gesture.startX ?? gesture.start?.x);
+            const recordedY1 = asNumber(gesture.y1 ?? gesture.startY ?? gesture.start?.y);
+            const recordedX2 = asNumber(gesture.x2 ?? gesture.endX ?? gesture.end?.x);
+            const recordedY2 = asNumber(gesture.y2 ?? gesture.endY ?? gesture.end?.y);
+            const currentScreen = await getDeviceBounds(actionDeviceId);
+            const normalizedX1 = asNumber(gesture.normalizedX1 ?? gesture.normalizedStartX);
+            const normalizedY1 = asNumber(gesture.normalizedY1 ?? gesture.normalizedStartY);
+            const normalizedX2 = asNumber(gesture.normalizedX2 ?? gesture.normalizedEndX);
+            const normalizedY2 = asNumber(gesture.normalizedY2 ?? gesture.normalizedEndY);
+            const recordedWidth = asNumber(gesture.screenWidth);
+            const recordedHeight = asNumber(gesture.screenHeight);
+            const x1 = Number.isFinite(normalizedX1) ? Math.round(normalizedX1 * currentScreen.displayWidth) : (Number.isFinite(recordedWidth) ? Math.round(recordedX1 * currentScreen.displayWidth / recordedWidth) : recordedX1);
+            const y1 = Number.isFinite(normalizedY1) ? Math.round(normalizedY1 * currentScreen.displayHeight) : (Number.isFinite(recordedHeight) ? Math.round(recordedY1 * currentScreen.displayHeight / recordedHeight) : recordedY1);
+            const x2 = Number.isFinite(normalizedX2) ? Math.round(normalizedX2 * currentScreen.displayWidth) : (Number.isFinite(recordedWidth) ? Math.round(recordedX2 * currentScreen.displayWidth / recordedWidth) : recordedX2);
+            const y2 = Number.isFinite(normalizedY2) ? Math.round(normalizedY2 * currentScreen.displayHeight) : (Number.isFinite(recordedHeight) ? Math.round(recordedY2 * currentScreen.displayHeight / recordedHeight) : recordedY2);
+            if (![x1, y1, x2, y2].every(Number.isFinite)) {
+              throw new Error(`[Playback][Swipe] Missing recorded coordinates: ${JSON.stringify(gesture)}`);
+            }
+            console.log(`[Playback][Swipe] (${recordedX1},${recordedY1}) -> (${recordedX2},${recordedY2}) resolved for ${currentScreen.displayWidth}x${currentScreen.displayHeight} as (${x1},${y1}) -> (${x2},${y2})`);
+            cmd = `adb -s ${actionDeviceId} shell input swipe ${x1} ${y1} ${x2} ${y2} ${gesture.duration || 300}`;
             // Anchor the gesture to the element it started on
             const preXml = await getHierarchyBeforeGesture(actionDeviceId);
-            locatorAttr = await getElementAtCoordinates(actionDeviceId, params.x1, params.y1, preXml).catch(() => null);
+            locatorAttr = await getElementAtCoordinates(actionDeviceId, x1, y1, preXml).catch(() => null);
           } else if (action === 'press') {
             let keycode = 4; // Back default
             if (params.key === 'Home') keycode = 3;

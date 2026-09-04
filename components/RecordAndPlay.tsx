@@ -794,7 +794,22 @@ const RecordAndPlay: React.FC<RecordAndPlayProps> = ({ project, user, onUpdatePr
           if (tapCoords) { params.x = tapCoords.x; params.y = tapCoords.y; }
           if (action === 'fill' || action === 'type') params.text = String(step.value ?? '');
           if (action === 'press') params.key = step.value || 'Back';
-          if (action === 'swipe' && (step as any).swipe) Object.assign(params, (step as any).swipe);
+          // Swipe is the only action that must use its recorded coordinates.
+          // Keep every other action on its existing node-resolution path.
+          if (action === 'swipe' || action === 'scroll') {
+            const gesture = (step as any).swipe || (step as any);
+            params.x1 = gesture.x1 ?? gesture.startX ?? gesture.start?.x;
+            params.y1 = gesture.y1 ?? gesture.startY ?? gesture.start?.y;
+            params.x2 = gesture.x2 ?? gesture.endX ?? gesture.end?.x;
+            params.y2 = gesture.y2 ?? gesture.endY ?? gesture.end?.y;
+            params.duration = gesture.duration;
+            params.screenWidth = gesture.screenWidth;
+            params.screenHeight = gesture.screenHeight;
+            params.normalizedX1 = gesture.normalizedX1 ?? gesture.normalizedStartX;
+            params.normalizedY1 = gesture.normalizedY1 ?? gesture.normalizedStartY;
+            params.normalizedX2 = gesture.normalizedX2 ?? gesture.normalizedEndX;
+            params.normalizedY2 = gesture.normalizedY2 ?? gesture.normalizedEndY;
+          }
           if (action === 'assertion' || action === 'navigate') {
             setStepExecutionStatus(prev => ({ ...prev, [step.id]: 'passed' }));
             continue;
@@ -1996,6 +2011,15 @@ const RecordAndPlay: React.FC<RecordAndPlayProps> = ({ project, user, onUpdatePr
         screenshot: eventData.screenshot || eventData.image,
         x: eventData.x,
         y: eventData.y,
+        x1: eventData.x1,
+        y1: eventData.y1,
+        x2: eventData.x2,
+        y2: eventData.y2,
+        duration: eventData.duration,
+        normalizedX1: eventData.normalizedX1,
+        normalizedY1: eventData.normalizedY1,
+        normalizedX2: eventData.normalizedX2,
+        normalizedY2: eventData.normalizedY2,
         scrollX: eventData.scrollX,
         scrollY: eventData.scrollY
       };

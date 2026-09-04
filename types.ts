@@ -470,7 +470,7 @@ export interface UniversalLocator {
 
 export interface RecordedStep {
   id: string;
-  action: 'click' | 'dblclick' | 'type' | 'fill' | 'select' | 'selectOption' | 'check' | 'uncheck' | 'hover' | 'scroll' | 'drag' | 'drop' | 'assertion' | 'navigate' | 'wait' | 'press' | 'upload' | 'focus' | 'blur' | 'visibility' | 'submit' | 'dialog' | 'open_tab' | 'close_tab' | 'switch_tab' | 'shortcut';
+  action: 'click' | 'dblclick' | 'type' | 'fill' | 'select' | 'selectOption' | 'check' | 'uncheck' | 'hover' | 'scroll' | 'swipe' | 'drag' | 'drop' | 'assertion' | 'navigate' | 'wait' | 'press' | 'upload' | 'focus' | 'blur' | 'visibility' | 'submit' | 'dialog' | 'open_tab' | 'close_tab' | 'switch_tab' | 'shortcut';
   locator: UniversalLocator;
   elementName?: string;
   value?: string;
@@ -500,6 +500,15 @@ export interface RecordedStep {
   screenHeight?: number;
   normalizedX?: number;
   normalizedY?: number;
+  x1?: number;
+  y1?: number;
+  x2?: number;
+  y2?: number;
+  duration?: number;
+  normalizedX1?: number;
+  normalizedY1?: number;
+  normalizedX2?: number;
+  normalizedY2?: number;
   targetBox?: { x: number; y: number; width: number; height: number };
   frameInfo?: FrameInfo;
   pageIndex?: number;
