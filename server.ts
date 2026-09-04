@@ -6258,13 +6258,14 @@ async function startServer() {
         let stepError = '';
 
         let stepInteractRes: any = null;
+        let urlBeforeAction = page.url();
 
         try {
           const action = step.action;
           const selector = step.locator?.primary?.value || step.selector;
           const value = step.value;
           const elementName = step.elementName || '';
-          const urlBeforeAction = page.url();
+          urlBeforeAction = page.url();
 
           console.log(`[Playback Engine] Step ${i + 1}/${steps.length}: [${action.toUpperCase()}] Selector: "${selector}" Value: "${value}" Screen/URL: "${step.url || step.screen || ''}"`);
 
@@ -6276,29 +6277,26 @@ async function startServer() {
             if (targetNav) {
               currentUrl = await safeNavigatePage(targetNav);
             }
-          } else if (['click', 'dblclick', 'fill', 'type', 'select', 'selectOption', 'check', 'uncheck', 'hover', 'focus', 'clear', 'scroll', 'press', 'submit', 'upload'].includes(action)) {
-            // Check if step was recorded on a different page and the browser has not navigated there yet
-            const stepRecordedUrl = resolveFullStepUrl(step.url, currentUrl) || resolveCandidateNavUrl(step, currentUrl);
-            if (stepRecordedUrl && /^https?:\/\//i.test(stepRecordedUrl)) {
-              const currentP = page.url() || '';
-              try {
-                const parsedCurrent = new URL(currentP);
-                const parsedRecorded = new URL(stepRecordedUrl);
-                const isDifferentPage = parsedCurrent.origin !== parsedRecorded.origin || 
-                  (parsedCurrent.pathname !== parsedRecorded.pathname && !parsedCurrent.pathname.endsWith(parsedRecorded.pathname) && !parsedRecorded.pathname.endsWith(parsedCurrent.pathname));
-                if (isDifferentPage) {
-                  console.log(`[Playback Engine] Multi-page sync: Navigating to step recorded page: ${stepRecordedUrl}`);
-                  currentUrl = await safeNavigatePage(stepRecordedUrl);
-                }
-              } catch (e) {}
-            }
-
+          } else if (action === 'submit') {
+            // A submit event is observational: the preceding click or Enter
+            // already caused it during recording and is replayed separately.
+            // Submitting again can duplicate login requests, or fail after the
+            // successful action has already navigated away from the form.
+            console.log('[Playback Engine] Skipping redundant captured submit event.');
+          } else if (['click', 'dblclick', 'fill', 'type', 'select', 'selectOption', 'check', 'uncheck', 'hover', 'focus', 'clear', 'scroll', 'press', 'upload'].includes(action)) {
             let res = await findAndInteractElement(page, step, action, value);
 
-            // If element was not found, attempt URL synchronization as fallback before failing
+            // An interaction's URL is recording context, not a navigation
+            // command. Never let stale metadata move a fill/click to another
+            // origin. Same-origin recovery supports older recordings which
+            // omitted an explicit navigate step between application routes.
             if (!res.success && step.url) {
               const fallbackUrl = resolveFullStepUrl(step.url, currentUrl);
-              if (fallbackUrl && /^https?:\/\//i.test(fallbackUrl) && fallbackUrl !== page.url()) {
+              let isSameOriginRecovery = false;
+              try {
+                isSameOriginRecovery = Boolean(fallbackUrl) && new URL(fallbackUrl as string).origin === new URL(page.url()).origin;
+              } catch (e) {}
+              if (isSameOriginRecovery && fallbackUrl !== page.url()) {
                 console.log(`[Playback Engine] Element interaction retry: Synchronizing page to recorded URL: ${fallbackUrl}`);
                 try {
                   currentUrl = await safeNavigatePage(fallbackUrl);
@@ -6330,7 +6328,7 @@ async function startServer() {
 
           // A recorded interaction may navigate. Prefer a real URL/load-state
           // transition; the short wait is only a visual settle, not ordering.
-          if (['click', 'dblclick', 'submit', 'press'].includes(action)) {
+          if (['click', 'dblclick', 'press'].includes(action)) {
             await page.waitForURL(url => url.toString() !== urlBeforeAction, { timeout: 4000 }).catch(() => {});
             await ensurePageFullyReady(page, 8000);
           }
@@ -6342,6 +6340,16 @@ async function startServer() {
         const resultingUrl = page.url() || currentUrl;
         currentUrl = resultingUrl;
         const pageTitle = await page.title().catch(() => '');
+        // Geometry is measured before an interaction. When that interaction
+        // navigates, those coordinates belong to the previous document and
+        // must not be drawn over the screenshot of the destination page.
+        const geometryMatchesScreenshot = (() => {
+          try {
+            return new URL(resultingUrl).href === new URL(urlBeforeAction).href;
+          } catch {
+            return resultingUrl === urlBeforeAction;
+          }
+        })();
 
         let screenshotBase64 = '';
         try {
@@ -6366,9 +6374,12 @@ async function startServer() {
           resultingUrl: resultingUrl || step.url || currentUrl,
           pageTitle,
           screenshot: screenshotBase64,
+          geometryMatchesScreenshot,
           redirectChain: redirectLog.slice(-2),
-          coordinates: stepInteractRes?.coordinates || (typeof step.x === 'number' && typeof step.y === 'number' ? { x: step.x, y: step.y } : null),
-          targetBox: stepInteractRes?.targetBox || step.targetBox || null
+          coordinates: geometryMatchesScreenshot
+            ? (stepInteractRes?.coordinates || (typeof step.x === 'number' && typeof step.y === 'number' ? { x: step.x, y: step.y } : null))
+            : null,
+          targetBox: geometryMatchesScreenshot ? (stepInteractRes?.targetBox || step.targetBox || null) : null
         };
 
         results.push(resultItem);

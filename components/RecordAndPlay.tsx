@@ -579,6 +579,7 @@ const RecordAndPlay: React.FC<RecordAndPlayProps> = ({ project, user, onUpdatePr
   const [cursorPos, setCursorPos] = useState<{ x: number; y: number }>({ x: 15, y: 15 });
   const [prevCursorPos, setPrevCursorPos] = useState<{ x: number; y: number }>({ x: 15, y: 15 });
   const [currentTargetBox, setCurrentTargetBox] = useState<{ x: number; y: number; width: number; height: number }>({ x: 42, y: 48, width: 16, height: 5 });
+  const [playbackGeometryVisible, setPlaybackGeometryVisible] = useState(false);
   const [isClicking, setIsClicking] = useState<boolean>(false);
   const [activeTypingText, setActiveTypingText] = useState<string>('');
   const [showInteractionOverlay, setShowInteractionOverlay] = useState<boolean>(true);
@@ -733,6 +734,7 @@ const RecordAndPlay: React.FC<RecordAndPlayProps> = ({ project, user, onUpdatePr
     setCursorPos(initPos);
     setPrevCursorPos(initPos);
     setCurrentTargetBox(initBox);
+    setPlaybackGeometryVisible(firstStep.action !== 'navigate');
     setIsClicking(false);
     setActiveTypingText('');
 
@@ -834,6 +836,7 @@ const RecordAndPlay: React.FC<RecordAndPlayProps> = ({ project, user, onUpdatePr
     setCursorPos(initialTargetPos);
     setPrevCursorPos(initialTargetPos);
     setCurrentTargetBox(initialTargetBox);
+    setPlaybackGeometryVisible(firstStep.action !== 'navigate');
     setIsClicking(false);
     setActiveTypingText('');
 
@@ -1004,7 +1007,12 @@ const RecordAndPlay: React.FC<RecordAndPlayProps> = ({ project, user, onUpdatePr
         const step = steps[resItem.stepIndex] || steps[processedCount - 1];
 
         setCurrentPlaybackStepIndex(resItem.stepIndex);
-        setStepExecutionStatus(prev => ({ ...prev, [resItem.stepId]: 'running' }));
+        // A backend result can already be failed when it reaches the visual
+        // player. Do not temporarily present that failed action as running.
+        setStepExecutionStatus(prev => ({
+          ...prev,
+          [resItem.stepId]: resItem.status === 'passed' ? 'running' : resItem.status
+        }));
 
         if (resItem.resultingUrl) {
           if (currentLiveUrl && currentLiveUrl !== resItem.resultingUrl) {
@@ -1043,6 +1051,9 @@ const RecordAndPlay: React.FC<RecordAndPlayProps> = ({ project, user, onUpdatePr
         setPrevCursorPos(cursorPos);
         setCursorPos(targetPos);
         setCurrentTargetBox(targetBox);
+        setPlaybackGeometryVisible(resItem.geometryMatchesScreenshot !== false && Boolean(
+          resItem.coordinates || resItem.targetBox
+        ));
         setIsClicking(false);
         setActiveTypingText('');
 
@@ -1050,12 +1061,12 @@ const RecordAndPlay: React.FC<RecordAndPlayProps> = ({ project, user, onUpdatePr
         await new Promise(r => setTimeout(r, Math.max(35, Math.round(200 / playbackSpeed))));
 
         // Perform visual action animation strictly in sequence
-        if (step.action === 'click' || step.action === 'dblclick') {
+        if (resItem.status === 'passed' && (step.action === 'click' || step.action === 'dblclick')) {
           setIsClicking(true);
           await new Promise(r => setTimeout(r, Math.max(35, Math.round(140 / playbackSpeed))));
           setIsClicking(false);
           await new Promise(r => setTimeout(r, Math.max(30, Math.round(120 / playbackSpeed))));
-        } else if ((step.action === 'fill' || step.action === 'type') && step.value !== undefined) {
+        } else if (resItem.status === 'passed' && (step.action === 'fill' || step.action === 'type') && step.value !== undefined) {
           // 1. Click the exact recorded input field first to focus it
           setIsClicking(true);
           await new Promise(r => setTimeout(r, Math.max(35, Math.round(140 / playbackSpeed))));
@@ -2099,6 +2110,17 @@ const RecordAndPlay: React.FC<RecordAndPlayProps> = ({ project, user, onUpdatePr
         const lastSelector = lastStep.locator?.primary?.value;
         
         if (lastSelector && currentSelector && lastSelector === currentSelector && Date.now() - (lastStep.timestamp || 0) < 300) {
+          return prev;
+        }
+      }
+
+      // Native form submission fires after the user action which caused it.
+      // Replaying both the button/Enter and this synthetic submit duplicates
+      // the login request and often looks for a form after navigation.
+      if (lastStep && eventData.action === 'submit') {
+        const wasTriggeredByUserAction = ['click', 'press'].includes(lastStep.action);
+        const submittedImmediatelyAfter = Date.now() - (lastStep.timestamp || 0) < 2000;
+        if (wasTriggeredByUserAction && submittedImmediatelyAfter) {
           return prev;
         }
       }
@@ -7891,7 +7913,7 @@ ${currentSteps.map(step => formatStepToScript(step, 'web')).join('\n')}
                         )}
 
                         {/* Live Interactive Movement & Visual Interaction Overlay */}
-                        {showInteractionOverlay && (
+                        {showInteractionOverlay && playbackGeometryVisible && (
                           <div className="absolute inset-0 pointer-events-none z-30 overflow-hidden">
                             
                             {/* Target Element Highlighting Focus Ring */}
@@ -8000,14 +8022,25 @@ ${currentSteps.map(step => formatStepToScript(step, 'web')).join('\n')}
                                   {playbackFlow.steps[currentPlaybackStepIndex].action}
                                 </span>
                               </div>
-                              <span className="text-[9px] font-mono text-emerald-400 flex items-center gap-1 font-bold">
-                                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" /> Live Interaction
+                              <span className={`text-[9px] font-mono flex items-center gap-1 font-bold ${
+                                stepExecutionStatus[playbackFlow.steps[currentPlaybackStepIndex].id] === 'failed'
+                                  ? 'text-rose-400'
+                                  : 'text-emerald-400'
+                              }`}>
+                                <span className={`w-1.5 h-1.5 rounded-full ${
+                                  stepExecutionStatus[playbackFlow.steps[currentPlaybackStepIndex].id] === 'failed'
+                                    ? 'bg-rose-400'
+                                    : 'bg-emerald-400 animate-pulse'
+                                }`} />
+                                {stepExecutionStatus[playbackFlow.steps[currentPlaybackStepIndex].id] === 'failed' ? 'Interaction Failed' : 'Live Interaction'}
                               </span>
                             </div>
                             <p className="text-xs font-bold text-slate-200">
                               {playbackFlow.steps[currentPlaybackStepIndex].elementName || playbackFlow.steps[currentPlaybackStepIndex].locator?.primary?.value || 'Target Element'}
                             </p>
-                            {playbackFlow.steps[currentPlaybackStepIndex].value && (
+                            {playbackFlow.steps[currentPlaybackStepIndex].value &&
+                              stepExecutionStatus[playbackFlow.steps[currentPlaybackStepIndex].id] !== 'failed' &&
+                              stepExecutionStatus[playbackFlow.steps[currentPlaybackStepIndex].id] !== 'skipped' && (
                               <p className="text-[10px] text-emerald-400 font-mono mt-1 bg-slate-900 px-2 py-1 rounded border border-slate-800">
                                 Value: "{playbackFlow.steps[currentPlaybackStepIndex].value}"
                               </p>

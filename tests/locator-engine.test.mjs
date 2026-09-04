@@ -77,3 +77,35 @@ test('playback selects recorded nth and rejects ambiguous first-match fallback',
   assert.match(source, /count > 1 && recordedIndex === undefined/);
   assert.match(source, /Recorded element could not be uniquely identified/);
 });
+
+test('playback never overlays pre-redirect geometry on the destination screenshot', async () => {
+  const serverSource = await readFile(new URL('../server.ts', import.meta.url), 'utf8');
+  const playerSource = await readFile(new URL('../components/RecordAndPlay.tsx', import.meta.url), 'utf8');
+  assert.match(serverSource, /geometryMatchesScreenshot/);
+  assert.match(serverSource, /coordinates: geometryMatchesScreenshot/);
+  assert.match(playerSource, /resItem\.geometryMatchesScreenshot !== false/);
+  assert.match(playerSource, /showInteractionOverlay && playbackGeometryVisible/);
+});
+
+test('failed fill results are not animated or presented as live input', async () => {
+  const playerSource = await readFile(new URL('../components/RecordAndPlay.tsx', import.meta.url), 'utf8');
+  assert.match(playerSource, /resItem\.status === 'passed' && \(step\.action === 'fill'/);
+  assert.match(playerSource, /resItem\.status === 'passed' \? 'running' : resItem\.status/);
+  assert.match(playerSource, /'Interaction Failed' : 'Live Interaction'/);
+});
+
+test('ordinary interactions cannot navigate to a recorded cross-origin URL', async () => {
+  const source = await readFile(new URL('../server.ts', import.meta.url), 'utf8');
+  assert.doesNotMatch(source, /Multi-page sync: Navigating to step recorded page/);
+  assert.match(source, /new URL\(fallbackUrl as string\)\.origin === new URL\(page\.url\(\)\)\.origin/);
+  assert.match(source, /An interaction's URL is recording context, not a navigation/);
+});
+
+test('captured submit after click or Enter is redundant and non-fatal', async () => {
+  const serverSource = await readFile(new URL('../server.ts', import.meta.url), 'utf8');
+  const playerSource = await readFile(new URL('../components/RecordAndPlay.tsx', import.meta.url), 'utf8');
+  assert.match(playerSource, /eventData\.action === 'submit'/);
+  assert.match(playerSource, /\['click', 'press'\]\.includes\(lastStep\.action\)/);
+  assert.match(serverSource, /Skipping redundant captured submit event/);
+  assert.doesNotMatch(serverSource, /'press', 'submit', 'upload'/);
+});
