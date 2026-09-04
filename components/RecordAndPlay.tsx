@@ -307,10 +307,43 @@ const RecordAndPlay: React.FC<RecordAndPlayProps> = ({ project, user, onUpdatePr
   const [recordingDuration, setRecordingDuration] = useState(0);
   const [activeFlowId, setActiveFlowId] = useState<string | null>(null);
   const [flows, setFlows] = useState<RecordedFlow[]>(project.recordedFlows || []);
+  const locallySavedFlowsRef = useRef<Map<string, RecordedFlow>>(new Map());
+
+  const localFlowBackupKey = `automatiqa_saved_flows_${project.id}`;
+  const persistLocalFlowBackup = (savedFlows: RecordedFlow[]) => {
+    try {
+      // Screenshots are intentionally excluded to stay within localStorage's
+      // quota; the executable flow metadata and locators remain recoverable.
+      const compactFlows = savedFlows.map(flow => ({
+        ...flow,
+        steps: (flow.steps || []).map(({ screenshot, ...step }) => step)
+      }));
+      localStorage.setItem(localFlowBackupKey, JSON.stringify(compactFlows));
+    } catch (error) {
+      console.warn('Could not update the local recorded-flow backup:', error);
+    }
+  };
 
   useEffect(() => {
-    setFlows(project.recordedFlows || []);
-  }, [project.recordedFlows]);
+    let backedUpFlows: RecordedFlow[] = [];
+    try {
+      const rawBackup = localStorage.getItem(localFlowBackupKey);
+      backedUpFlows = rawBackup ? JSON.parse(rawBackup) : [];
+    } catch (error) {
+      console.warn('Could not read the local recorded-flow backup:', error);
+    }
+
+    const incomingFlows = project.recordedFlows || [];
+    const reconciled = new Map<string, RecordedFlow>();
+    backedUpFlows.forEach(flow => flow?.id && reconciled.set(flow.id, flow));
+    locallySavedFlowsRef.current.forEach(flow => flow?.id && reconciled.set(flow.id, flow));
+    incomingFlows.forEach(flow => flow?.id && reconciled.set(flow.id, flow));
+
+    const mergedFlows = Array.from(reconciled.values());
+    locallySavedFlowsRef.current = new Map(mergedFlows.map(flow => [flow.id, flow]));
+    setFlows(mergedFlows);
+    persistLocalFlowBackup(mergedFlows);
+  }, [project.id, project.recordedFlows]);
 
   const [currentSteps, setCurrentSteps] = useState<RecordedStep[]>([]);
   const [flowName, setFlowName] = useState('New Recording Flow');
@@ -3520,16 +3553,24 @@ const RecordAndPlay: React.FC<RecordAndPlayProps> = ({ project, user, onUpdatePr
     setIsCreatingNewFlowFolder(false);
     setSearchFlowFolderQuery('');
     
+    const availableFlowFolders = (project.automationFolders || []).filter(isFlowFolderForPlatform);
+
     // Auto-select active folder if valid or first available flow folder for this platform
-    if (activeFolderId && project.automationFolders?.some(f => (f.id === activeFolderId || f.name.toLowerCase() === activeFolderId.toLowerCase()) && isFlowFolderForPlatform(f))) {
+    if (activeFolderId && availableFlowFolders.some(f => f.id === activeFolderId || f.name.toLowerCase() === activeFolderId.toLowerCase())) {
       const matched = project.automationFolders.find(f => (f.id === activeFolderId || f.name.toLowerCase() === activeFolderId.toLowerCase()) && isFlowFolderForPlatform(f));
       if (matched) setSelectedFolder(matched.id);
-    } else if (selectedFolder && project.automationFolders?.some(f => (f.id === selectedFolder || f.name.toLowerCase() === selectedFolder.toLowerCase()) && isFlowFolderForPlatform(f))) {
+    } else if (selectedFolder && availableFlowFolders.some(f => f.id === selectedFolder || f.name.toLowerCase() === selectedFolder.toLowerCase())) {
       // Keep existing
     } else {
-      const firstFolder = project.automationFolders?.find(isFlowFolderForPlatform);
+      const firstFolder = availableFlowFolders[0];
       if (firstFolder) {
         setSelectedFolder(firstFolder.id);
+      } else {
+        // Do not leave a completed recording in an unsaveable modal when the
+        // project has no compatible folder yet.
+        setSelectedFolder('');
+        setIsCreatingNewFlowFolder(true);
+        setNewFlowFolderName(platform === 'web' ? 'Web Recorded Flows' : 'Mobile Recorded Flows');
       }
     }
     setIsSaveFlowModalOpen(true);
@@ -3543,6 +3584,19 @@ const RecordAndPlay: React.FC<RecordAndPlayProps> = ({ project, user, onUpdatePr
 
     let folderId = selectedFolder;
     let updatedFolders = project.automationFolders || [];
+
+    // Defensive fallback for stale modal state or projects with no folders.
+    // Saving a completed flow should always have a valid destination.
+    if (!isCreatingNewFlowFolder && !folderId) {
+      const availableFolder = updatedFolders.find(isFlowFolderForPlatform);
+      if (availableFolder) {
+        folderId = availableFolder.id;
+      } else {
+        const defaultName = platform === 'web' ? 'Web Recorded Flows' : 'Mobile Recorded Flows';
+        folderId = `folder-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`;
+        updatedFolders = [...updatedFolders, { id: folderId, name: defaultName, type: 'flow', platform }];
+      }
+    }
 
     if (isCreatingNewFlowFolder) {
       if (!newFlowFolderName.trim()) {
@@ -3582,6 +3636,8 @@ const RecordAndPlay: React.FC<RecordAndPlayProps> = ({ project, user, onUpdatePr
       : [...currentFlowList, newFlow];
 
     setFlows(updatedFlows);
+    locallySavedFlowsRef.current.set(newFlow.id, newFlow);
+    persistLocalFlowBackup(updatedFlows);
     setActiveFlowId(newFlow.id);
 
     // If a script has been generated during this session, ensure it is also saved to the selected folder
@@ -3867,6 +3923,8 @@ const RecordAndPlay: React.FC<RecordAndPlayProps> = ({ project, user, onUpdatePr
     if (itemToDelete.type === 'flow') {
       const updatedFlows = flows.filter(f => f.id !== itemToDelete.id);
       setFlows(updatedFlows);
+      locallySavedFlowsRef.current.delete(itemToDelete.id);
+      persistLocalFlowBackup(updatedFlows);
       
       if (activeFlowId === itemToDelete.id) {
         setActiveFlowId(null);

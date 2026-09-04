@@ -109,3 +109,20 @@ test('captured submit after click or Enter is redundant and non-fatal', async ()
   assert.match(serverSource, /Skipping redundant captured submit event/);
   assert.doesNotMatch(serverSource, /'press', 'submit', 'upload'/);
 });
+
+test('saving a completed flow creates a destination when no flow folder exists', async () => {
+  const source = await readFile(new URL('../components/RecordAndPlay.tsx', import.meta.url), 'utf8');
+  assert.match(source, /setIsCreatingNewFlowFolder\(true\)/);
+  assert.match(source, /'Web Recorded Flows' : 'Mobile Recorded Flows'/);
+  assert.match(source, /if \(!isCreatingNewFlowFolder && !folderId\)/);
+  assert.match(source, /type: 'flow', platform/);
+});
+
+test('delayed project snapshots cannot remove a locally saved flow', async () => {
+  const source = await readFile(new URL('../components/RecordAndPlay.tsx', import.meta.url), 'utf8');
+  assert.match(source, /locallySavedFlowsRef = useRef<Map<string, RecordedFlow>>/);
+  assert.match(source, /automatiqa_saved_flows_/);
+  assert.match(source, /locallySavedFlowsRef\.current\.forEach/);
+  assert.match(source, /incomingFlows\.forEach/);
+  assert.match(source, /locallySavedFlowsRef\.current\.delete\(itemToDelete\.id\)/);
+});
