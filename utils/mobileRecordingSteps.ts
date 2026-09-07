@@ -3,6 +3,10 @@ import { RecordedStep } from '../types';
 export interface MobileStepMetrics {
   targetBox?: { x: number; y: number; width: number; height: number };
   coordinates?: { x: number; y: number };
+  screenWidth?: number;
+  screenHeight?: number;
+  normalizedX?: number;
+  normalizedY?: number;
   recordOnly?: boolean;
 }
 
@@ -66,10 +70,34 @@ export function buildMobileRecordedStep(
     screen: (elem.screen || screen || 'MAIN').toUpperCase(),
     platform: 'mobile',
     bounds: elem.bounds,
+    node: {
+      resourceId: elem.resourceId,
+      accessibilityId: elem.accessibilityId,
+      contentDescription: elem.contentDescription,
+      text: elem.text,
+      className: elem.type,
+      clickable: elem.clickable,
+      enabled: elem.enabled,
+      bounds: elem.bounds
+    },
+    target: {
+      resourceId: elem.resourceId,
+      accessibilityId: elem.accessibilityId,
+      contentDescription: elem.contentDescription,
+      text: elem.text,
+      className: elem.type,
+      clickable: elem.clickable,
+      enabled: elem.enabled,
+      bounds: elem.bounds
+    },
     targetBox: metrics?.targetBox,
     coordinates: metrics?.coordinates,
     x: metrics?.coordinates?.x,
     y: metrics?.coordinates?.y,
+    screenWidth: metrics?.screenWidth,
+    screenHeight: metrics?.screenHeight,
+    normalizedX: metrics?.normalizedX,
+    normalizedY: metrics?.normalizedY,
     screenshot: screenshot || undefined,
     timestamp: Date.now()
   };

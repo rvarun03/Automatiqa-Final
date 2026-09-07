@@ -133,6 +133,10 @@ interface MobileRecordingInspectorProps {
     extraMetrics?: {
       targetBox?: { x: number; y: number; width: number; height: number };
       coordinates?: { x: number; y: number };
+      screenWidth?: number;
+      screenHeight?: number;
+      normalizedX?: number;
+      normalizedY?: number;
       /** Upgrade an already-captured step to its resolved UI node without
        *  gesturing on the device again. */
       recordOnly?: boolean;
@@ -4298,23 +4302,23 @@ export const MobileRecordingInspector: React.FC<MobileRecordingInspectorProps> =
         height: 1
       },
       coordinates: {
-        x: Number(((deviceX / naturalWidth) * 100).toFixed(1)),
-        y: Number(((deviceY / naturalHeight) * 100).toFixed(1))
-      }
+        x: deviceX,
+        y: deviceY
+      },
+      screenWidth: naturalWidth,
+      screenHeight: naturalHeight,
+      normalizedX: deviceX / naturalWidth,
+      normalizedY: deviceY / naturalHeight
     };
 
-    // Start resolving the hierarchy before dispatching the tap. The action can
-    // immediately mutate Upload -> Update or Like -> Liked, and the recorded
-    // name must describe the control the user actually pressed.
+    // Resolve the pre-action Android node before sending the device command.
+    // A screenshot coordinate can be offset by letterboxing/system insets and
+    // is not sufficient for small buttons or form controls.
     const email = encodeURIComponent(mobileUserEmail || 'shanmugapriya@qaoncloud.com');
     const preActionHierarchy = fetch(`/api/mobile/app/source?email=${email}`).then(async response => ({
       response,
       payload: await response.json()
     }));
-    setSelectedElement(coordinateElem);
-    onRecordElement(coordinateElem, action, inspectorMode === 'type' ? inspectorInputText : undefined, e, coordinateMetrics);
-
-    // Locator enrichment is best-effort and must never gate step capture.
     try {
       const { response, payload } = await preActionHierarchy;
       if (!response.ok || !payload.success || !payload.xml) {
@@ -4328,12 +4332,20 @@ export const MobileRecordingInspector: React.FC<MobileRecordingInspectorProps> =
         if (!match) return [];
         const [, x1, y1, x2, y2] = match.map(Number);
         if (deviceX < x1 || deviceX > x2 || deviceY < y1 || deviceY > y2) return [];
-        return [{ node, bounds, x1, y1, x2, y2, area: (x2 - x1) * (y2 - y1) }];
+        const area = (x2 - x1) * (y2 - y1);
+        const type = node.getAttribute('class') || node.tagName || '';
+        const enabled = node.getAttribute('enabled') !== 'false';
+        const clickable = node.getAttribute('clickable') === 'true';
+        const semantic = !!(node.getAttribute('resource-id') || node.getAttribute('text') || node.getAttribute('content-desc'));
+        const nativeControl = /(?:EditText|Button|ImageButton|CheckBox|RadioButton|Switch|Spinner)$/i.test(type);
+        const screenArea = naturalWidth * naturalHeight;
+        const rank = !enabled ? 5 : area >= screenArea * 0.82 ? 4 : nativeControl ? 0 : clickable ? 1 : semantic ? 2 : 3;
+        return [{ node, bounds, x1, y1, x2, y2, area, enabled, clickable, semantic, rank }];
       });
 
-      const clickableCandidates = candidates.filter(({ node }) => node.getAttribute('clickable') === 'true');
-      const match = (clickableCandidates.length ? clickableCandidates : candidates)
-        .sort((a, b) => a.area - b.area)[0];
+      const match = candidates
+        .filter(candidate => candidate.enabled && candidate.semantic)
+        .sort((a, b) => a.rank - b.rank || a.area - b.area)[0];
 
       if (!match) throw new Error('No UIAutomator element at the tapped coordinates');
 
@@ -4341,7 +4353,7 @@ export const MobileRecordingInspector: React.FC<MobileRecordingInspectorProps> =
       const resourceId = node.getAttribute('resource-id') || '';
       const text = node.getAttribute('text') || '';
       const accessibilityId = node.getAttribute('content-desc') || '';
-      const type = node.tagName;
+      const type = node.getAttribute('class') || node.tagName;
       if (/^android:id\/(?:navigationBarBackground|statusBarBackground|content)$/i.test(resourceId)) {
         throw new Error('Ignoring Android system surface');
       }
@@ -4368,17 +4380,31 @@ export const MobileRecordingInspector: React.FC<MobileRecordingInspectorProps> =
         enabled: node.getAttribute('enabled') !== 'false'
       };
       setSelectedElement(inspectedElem);
-
-      // Re-record the same interaction with the real node. The recorder replaces
-      // the coordinate placeholder in place, so the step ends up referencing an
-      // element that exists in the app's UI hierarchy rather than a screen
-      // position that breaks on any other device size.
-      onRecordElement(inspectedElem, action, inspectorMode === 'type' ? inspectorInputText : undefined, undefined, {
-        ...coordinateMetrics,
-        recordOnly: true
+      console.info('[Mobile recorder] pre-action target selected', {
+        touch: { x: deviceX, y: deviceY }, target: inspectedElem.name,
+        bounds: match.bounds, dispatch: { x: deviceX, y: deviceY }, rank: match.rank
+      });
+      // Dispatch exactly once at the point the user pressed. The hierarchy
+      // identifies the element, but must not move the user's tap to a center.
+      onRecordElement(inspectedElem, action, inspectorMode === 'type' ? inspectorInputText : undefined, e, {
+        targetBox: {
+          x: Number(((match.x1 / naturalWidth) * 100).toFixed(1)),
+          y: Number(((match.y1 / naturalHeight) * 100).toFixed(1)),
+          width: Number((((match.x2 - match.x1) / naturalWidth) * 100).toFixed(1)),
+          height: Number((((match.y2 - match.y1) / naturalHeight) * 100).toFixed(1))
+        },
+        coordinates: { x: deviceX, y: deviceY },
+        screenWidth: naturalWidth,
+        screenHeight: naturalHeight,
+        normalizedX: deviceX / naturalWidth,
+        normalizedY: deviceY / naturalHeight
       });
     } catch (error: any) {
       console.warn('Recording live tap with coordinate fallback:', error?.message || error);
+      // No real hierarchy means we cannot safely invent an element name. The
+      // coordinate fallback still lets the user interact with the device.
+      setSelectedElement(coordinateElem);
+      onRecordElement(coordinateElem, action, inspectorMode === 'type' ? inspectorInputText : undefined, e, coordinateMetrics);
     }
   };
 

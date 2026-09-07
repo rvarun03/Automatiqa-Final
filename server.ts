@@ -9649,14 +9649,16 @@ async function recordTokenLogServer(params: {
     launchActivity?: string;
     status: 'IDLE' | 'STARTING' | 'RUNNING' | 'ERROR';
     lastFrame?: string;
+    lastFrameCapturedAt?: number;
     pageSourceXml?: string;
+    pageSourceCapturedAt?: number;
     logs: Array<{ timestamp: string; level: 'INFO' | 'ADB' | 'APPIUM' | 'WARN' | 'ERROR'; message: string }>;
     recordedSteps?: any[];
   }
 
   const activeMobileSessions = new Map<string, ActiveMobileSession>();
   const pendingActionsMap = new Map<string, Array<{ id: string; action: string; params: any; timestamp: number }>>();
-  const mobileActionResults = new Map<string, { success: boolean; error?: string; completedAt: number }>();
+  const mobileActionResults = new Map<string, { success: boolean; error?: string; completedAt: number; frameCapturedAt?: number }>();
 
   function generateDefaultAppFrame(packageName?: string, appTitle?: string): string {
     let title = appTitle;
@@ -10064,11 +10066,11 @@ pause
     const email = ((req.query.email as string) || "shanmugapriya@qaoncloud.com").toLowerCase();
     const session = activeMobileSessions.get(email);
     if (session && session.lastFrame) {
-      return res.json({ success: true, frame: session.lastFrame });
+      return res.json({ success: true, frame: session.lastFrame, capturedAt: session.lastFrameCapturedAt });
     }
     const agent = getMobileAgent(email);
     if (agent && (agent as any).lastFrame) {
-      return res.json({ success: true, frame: (agent as any).lastFrame });
+      return res.json({ success: true, frame: (agent as any).lastFrame, capturedAt: (agent as any).lastFrameCapturedAt });
     }
 
     // A launch briefly has no screenshot while ADB switches activities. Do not
@@ -10083,7 +10085,7 @@ pause
 
   // Agent Frame Upload Endpoint
   app.post(["/api/device-agent/upload-frame", "/api/mobile/agent/upload-frame"], (req, res) => {
-    const { email, frame, image } = req.body;
+    const { email, frame, image, capturedAt } = req.body;
     const userEmail = (email || "sowbarnya@qaoncloud.com").toLowerCase();
     const frameData = frame || image;
 
@@ -10093,10 +10095,12 @@ pause
         : undefined);
       if (session) {
         session.lastFrame = frameData;
+        session.lastFrameCapturedAt = Number.isFinite(Number(capturedAt)) ? Number(capturedAt) : Date.now();
       }
       const agent = registeredMobileAgents.get(userEmail);
       if (agent) {
         (agent as any).lastFrame = frameData;
+        (agent as any).lastFrameCapturedAt = session?.lastFrameCapturedAt || Date.now();
       }
 
       // Broadcast real-time screen frame to connected UI clients
@@ -10106,6 +10110,27 @@ pause
     }
 
     res.json({ success: true });
+  });
+
+  // The live inspector resolves a browser tap against this exact UIAutomator
+  // snapshot.  Without this endpoint the agent's hierarchy upload was dropped
+  // and /app/source manufactured a demo hierarchy, causing real form fields
+  // to be recorded as unrelated controls.
+  app.post(["/api/device-agent/upload-hierarchy", "/api/mobile/agent/upload-hierarchy"], (req, res) => {
+    const { email, xml, deviceId, capturedAt } = req.body || {};
+    const userEmail = (email || "sowbarnya@qaoncloud.com").toLowerCase();
+    if (typeof xml !== 'string' || !xml.includes('<hierarchy')) {
+      return res.status(400).json({ success: false, error: 'Valid UIAutomator hierarchy XML is required.' });
+    }
+    const session = activeMobileSessions.get(userEmail) || (activeMobileSessions.size === 1
+      ? Array.from(activeMobileSessions.values())[0]
+      : undefined);
+    if (session) {
+      session.pageSourceXml = xml;
+      session.pageSourceCapturedAt = Number.isFinite(Number(capturedAt)) ? Number(capturedAt) : Date.now();
+      if (deviceId) session.deviceId = deviceId;
+    }
+    res.json({ success: true, capturedAt: session?.pageSourceCapturedAt || Date.now() });
   });
 
   // In-memory device logcat buffer per email/device
@@ -10271,9 +10296,9 @@ pause
   });
 
   app.post("/api/device-agent/action-result", (req, res) => {
-    const { actionId, success, error } = req.body || {};
+    const { actionId, success, error, frameCapturedAt } = req.body || {};
     if (!actionId) return res.status(400).json({ success: false, error: 'actionId is required' });
-    mobileActionResults.set(actionId, { success: success !== false, error, completedAt: Date.now() });
+    mobileActionResults.set(actionId, { success: success !== false, error, completedAt: Date.now(), frameCapturedAt: Number.isFinite(Number(frameCapturedAt)) ? Number(frameCapturedAt) : undefined });
     res.json({ success: true });
   });
 
@@ -10315,6 +10340,12 @@ pause
       const session = directSession || (activeMobileSessions.size === 1
         ? Array.from(activeMobileSessions.values())[0]
         : undefined);
+      // Recording input is accepted only for an explicitly active mobile
+      // session. Playback may produce touch events, but must never turn them
+      // into recorded steps merely because an agent is connected.
+      if (!session || session.status !== 'RUNNING') {
+        return res.json({ success: true, ignored: true, reason: 'No active mobile recording session' });
+      }
       const sessionEmail = session?.email || agentEmail;
       const agentFrame = (registeredMobileAgents.get(agentEmail) as any)?.lastFrame;
       const broadcastStep = {
@@ -10391,6 +10422,23 @@ pause
     res.json({ success: true, sessionId, session });
   });
 
+  // Mobile capture must have an explicit off switch. Previously this route was
+  // called by the UI but did not exist, leaving the desktop agent in its last
+  // RUNNING session while playback gestures were treated as new recordings.
+  app.post(["/api/device-agent/stop-recording", "/api/mobile/session/stop"], (req, res) => {
+    const userEmail = ((req.body?.email || req.query.email || "sowbarnya@qaoncloud.com") as string).toLowerCase();
+    const session = activeMobileSessions.get(userEmail);
+    if (session) {
+      session.status = 'IDLE';
+      session.logs.push({
+        timestamp: new Date().toLocaleTimeString(),
+        level: 'INFO',
+        message: 'Mobile recording stopped; playback/input gestures are not recordable.'
+      });
+    }
+    res.json({ success: true, recording: null });
+  });
+
   // Update Agent Status
   app.post(["/api/device-agent/update-status", "/api/mobile/agent/update-status"], (req, res) => {
     res.json({ success: true });
@@ -10453,7 +10501,7 @@ pause
     res.json({
       success: true,
       message: "Mobile Execution Agent registered successfully",
-      recording: activeSession ? {
+      recording: activeSession?.status === 'RUNNING' ? {
         deviceId: activeSession.deviceId,
         appPackage: activeSession.packageName,
         status: activeSession.status === 'RUNNING' ? 'Recording' : 'Starting'
@@ -10500,7 +10548,7 @@ pause
     res.json({
       success: true,
       registered: true,
-      recording: activeSession ? {
+      recording: activeSession?.status === 'RUNNING' ? {
         deviceId: activeSession.deviceId,
         appPackage: activeSession.packageName,
         status: activeSession.status === 'RUNNING' ? 'Recording' : 'Starting'
@@ -10847,27 +10895,16 @@ pause
     if (session && session.pageSourceXml) {
       return res.json({
         success: true,
-        xml: session.pageSourceXml
+        xml: session.pageSourceXml,
+        capturedAt: session.pageSourceCapturedAt
       });
     }
 
-    // Return dynamic XML matching current package
-    const pkg = session?.packageName || 'com.uploaded.application';
-    const dynamicXml = `<hierarchy rotation="0">
-  <android.widget.FrameLayout bounds="[0,0][1080,2400]">
-    <android.widget.LinearLayout bounds="[0,80][1080,2320]">
-      <android.widget.TextView resource-id="${pkg}:id/title_text" text="Welcome to Mobile Application" bounds="[90,340][990,720]" clickable="false" enabled="true"/>
-      <android.widget.EditText resource-id="${pkg}:id/input_user" content-desc="input_user" text="user@domain.com" bounds="[90,810][990,930]" clickable="true" enabled="true"/>
-      <android.widget.EditText resource-id="${pkg}:id/input_password" content-desc="input_password" text="" bounds="[90,1020][990,1140]" clickable="true" enabled="true"/>
-      <android.widget.Button resource-id="${pkg}:id/btn_login" content-desc="btn_login" text="SIGN IN / GET STARTED" bounds="[90,1190][990,1320]" clickable="true" enabled="true"/>
-      <android.widget.Button resource-id="${pkg}:id/btn_explore" content-desc="btn_explore" text="EXPLORE COURTS &amp; ARENA" bounds="[90,1350][990,1480]" clickable="true" enabled="true"/>
-    </android.widget.LinearLayout>
-  </android.widget.FrameLayout>
-</hierarchy>`;
-
-    res.json({
-      success: true,
-      xml: dynamicXml
+    // Never fabricate a hierarchy for a real-device tap. A coordinate-only
+    // step is recoverable; an unrelated fake node is not.
+    res.status(503).json({
+      success: false,
+      error: 'Waiting for the device UI hierarchy snapshot.'
     });
   });
 

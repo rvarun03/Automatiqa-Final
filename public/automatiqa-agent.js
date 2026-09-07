@@ -332,27 +332,136 @@ async function getElementAtCoordinates(deviceId, x, y, preloadedXml) {
   return null;
 }
 
+function xmlDecode(value) {
+  return String(value || '')
+    .replace(/&quot;/g, '"')
+    .replace(/&apos;/g, "'")
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>');
+}
+
+function parseBounds(bounds) {
+  const match = String(bounds || '').match(/^\[(\d+),(\d+)\]\[(\d+),(\d+)\]$/);
+  if (!match) return null;
+  const x1 = Number(match[1]);
+  const y1 = Number(match[2]);
+  const x2 = Number(match[3]);
+  const y2 = Number(match[4]);
+  if (![x1, y1, x2, y2].every(Number.isFinite) || x2 <= x1 || y2 <= y1) return null;
+  return {
+    x1, y1, x2, y2,
+    width: x2 - x1,
+    height: y2 - y1,
+    centerX: Math.round((x1 + x2) / 2),
+    centerY: Math.round((y1 + y2) / 2)
+  };
+}
+
+function getRecordedPoint(params) {
+  const bounds = parseBounds(params?.bounds || params?.target?.bounds || params?.node?.bounds || params?.locator?.primary?.bounds);
+  if (bounds) return { x: bounds.centerX, y: bounds.centerY };
+  if (params?.x !== undefined && params?.y !== undefined) {
+    const x = Number(params.x);
+    const y = Number(params.y);
+    if (Number.isFinite(x) && Number.isFinite(y)) return { x, y };
+  }
+  return null;
+}
+
+function parseUiNodes(xml) {
+  const nodes = [];
+  const nodeRegex = /<node\s+([^>]*?)\/?>/g;
+  let match;
+  while ((match = nodeRegex.exec(xml || '')) !== null) {
+    const attrs = match[1];
+    const getAttr = (name) => {
+      const m = attrs.match(new RegExp(`${name}="([^"]*)"`));
+      return m ? xmlDecode(m[1]).trim() : '';
+    };
+    const boundsText = getAttr('bounds');
+    const bounds = parseBounds(boundsText);
+    if (!bounds) continue;
+    nodes.push({
+      resourceId: getAttr('resource-id'),
+      contentDescription: getAttr('content-desc'),
+      text: getAttr('text'),
+      className: getAttr('class'),
+      clickable: getAttr('clickable') === 'true',
+      enabled: getAttr('enabled') !== 'false',
+      visibleToUser: getAttr('visible-to-user') !== 'false',
+      boundsText,
+      bounds
+    });
+  }
+  return nodes;
+}
+
 // Resolve a recorded native node on the current screen before falling back to
-// coordinates. This keeps playback stable when the device layout shifts.
+// coordinates. If several nodes match, choose the one nearest the recorded
+// position so repeated small icons do not resolve to the wrong copy.
 function resolveRecordedTarget(xml, params) {
   if (!xml || !params) return null;
   const target = params.target || params.node || {};
-  const wanted = target.resourceId || target.contentDescription || target.text || params.locator?.primary?.value || params.resourceId || params.contentDescription || params.text;
-  const type = target.resourceId ? 'resource-id' : target.contentDescription ? 'content-desc' : target.text ? 'text' : (params.locator?.primary?.type || '');
-  if (!wanted || type === 'coordinates' || type === 'xpath') return null;
-  const re = /<node\s+([^>]*)\s+bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"[^>]*\/?>/g;
-  let m;
-  while ((m = re.exec(xml))) {
-    const attrs = `${m[1]} ${m[0]}`;
-    const attr = type === 'resource-id' ? 'resource-id' : type === 'content-desc' ? 'content-desc' : 'text';
-    const hit = attrs.match(new RegExp(`${attr}="([^"]*)"`));
-    const classHit = attrs.match(/class="([^"]*)"/);
-    const classMatches = !target.className || !classHit || classHit[1] === target.className;
-    if (hit && hit[1] === String(wanted) && classMatches) {
-      return { x: Math.round((Number(m[3]) + Number(m[5])) / 2), y: Math.round((Number(m[4]) + Number(m[6])) / 2) };
+  const primary = params.locator?.primary || {};
+  const alternatives = Array.isArray(params.locator?.alternatives) ? params.locator.alternatives : [];
+  const wanted = {
+    resourceId: target.resourceId || params.resourceId || (primary.type === 'resource-id' ? primary.value : '') || alternatives.find(a => a?.type === 'resource-id')?.value,
+    contentDescription: target.contentDescription || target.accessibilityId || params.contentDescription || params.accessibilityId || (primary.type === 'content-desc' || primary.type === 'accessibility-id' ? primary.value : '') || alternatives.find(a => a?.type === 'content-desc' || a?.type === 'accessibility-id')?.value,
+    text: target.text || params.text || (primary.type === 'text' ? primary.value : '') || alternatives.find(a => a?.type === 'text')?.value,
+    className: target.className || params.className || ''
+  };
+  if (!wanted.resourceId && !wanted.contentDescription && !wanted.text && primary.type === 'coordinates') return null;
+
+  const recordedPoint = getRecordedPoint(params);
+  const nodes = parseUiNodes(xml).filter(node => node.enabled && node.visibleToUser);
+  const candidates = [];
+
+  for (const node of nodes) {
+    let score = 0;
+    const reasons = [];
+    if (wanted.resourceId && node.resourceId === String(wanted.resourceId)) {
+      score += 100;
+      reasons.push('resource-id');
     }
+    if (wanted.contentDescription && node.contentDescription === String(wanted.contentDescription)) {
+      score += 80;
+      reasons.push('content-desc');
+    }
+    if (wanted.text && node.text === String(wanted.text)) {
+      score += 60;
+      reasons.push('text');
+    }
+    if (wanted.className && node.className === String(wanted.className)) {
+      score += 20;
+      reasons.push('class');
+    }
+    if (!score) continue;
+    if (!node.clickable && !/(Button|CheckBox|RadioButton|Switch|ImageButton|TextView)$/i.test(node.className || '')) {
+      score -= 25;
+    }
+    const distance = recordedPoint
+      ? Math.hypot(node.bounds.centerX - recordedPoint.x, node.bounds.centerY - recordedPoint.y)
+      : 0;
+    candidates.push({ node, score, distance, locatorUsed: reasons.join('+') });
   }
-  return null;
+
+  candidates.sort((a, b) => b.score - a.score || a.distance - b.distance || (a.node.bounds.width * a.node.bounds.height) - (b.node.bounds.width * b.node.bounds.height));
+  const best = candidates[0];
+  if (!best || best.score < 40) return null;
+
+  return {
+    x: best.node.bounds.centerX,
+    y: best.node.bounds.centerY,
+    bounds: best.node.boundsText,
+    locatorUsed: best.locatorUsed,
+    className: best.node.className,
+    text: best.node.text,
+    resourceId: best.node.resourceId,
+    contentDescription: best.node.contentDescription,
+    clickable: best.node.clickable,
+    distance: Math.round(best.distance)
+  };
 }
 
 // Text typed with `adb shell input text` goes to whichever field holds focus, so
@@ -498,6 +607,38 @@ let lastUploadedHierarchyTime = 0;
 let touchListenerProcess = null;
 let currentListeningDevice = null;
 let touchDeviceBounds = { displayWidth: 1080, displayHeight: 2400, touchMaxX: 1080, touchMaxY: 2400 };
+// ADB-injected input is visible to getevent like a physical touch. Suppress it
+// so one inspector/playback tap cannot be recorded and replayed twice.
+let suppressInjectedTouchUntil = 0;
+// Browser live-frame recording creates the authoritative step before it sends
+// ADB input. For that transaction, getevent is only an echo of our command and
+// must never create a second (often stale-hierarchy) step.
+let browserDrivenCommandUntil = 0;
+const injectedTouchMarkers = [];
+
+function markInjectedTouch(x, y, kind = 'tap') {
+  if (!Number.isFinite(Number(x)) || !Number.isFinite(Number(y))) return;
+  injectedTouchMarkers.push({ x: Number(x), y: Number(y), kind, expiresAt: Date.now() + 5000 });
+  while (injectedTouchMarkers.length > 12) injectedTouchMarkers.shift();
+}
+
+function consumeInjectedTouch(x, y) {
+  const now = Date.now();
+  for (let index = injectedTouchMarkers.length - 1; index >= 0; index--) {
+    const marker = injectedTouchMarkers[index];
+    if (marker.expiresAt < now) {
+      injectedTouchMarkers.splice(index, 1);
+      continue;
+    }
+    // Input injection can be rounded differently by a device driver; 24px is
+    // deliberately much smaller than adjacent form controls/buttons.
+    if (Math.hypot(marker.x - x, marker.y - y) <= 24) {
+      injectedTouchMarkers.splice(index, 1);
+      return marker;
+    }
+  }
+  return null;
+}
 
 async function getDeviceBounds(deviceId) {
   let displayWidth = 1080;
@@ -548,12 +689,17 @@ const KEY_MAP = {
 let typingBuffer = '';
 let typingTimer = null;
 let lastFocusedElement = null;
+let focusedTextBeforeTyping = '';
 let lastTrackedActivity = '';
 let lastForegroundPackage = '';
 
 // The package under test, as reported by the server with each heartbeat
 function getTargetPackage() {
   return (activeRecordingSession && (activeRecordingSession.appPackage || activeRecordingSession.packageName)) || '';
+}
+
+function isRecordingActive() {
+  return !!activeRecordingSession && activeRecordingSession.status !== 'Stopped';
 }
 
 // Only interactions with the app under test belong in the recording. Without this
@@ -569,10 +715,38 @@ function skipForegroundMismatch(what) {
   console.log(`[Recorder] Ignoring ${what}: "${lastForegroundPackage}" is in the foreground, not the app under test "${getTargetPackage()}".`);
 }
 
-function flushTypingBuffer(deviceId) {
+async function flushTypingBuffer(deviceId) {
+  if (!isRecordingActive()) {
+    typingBuffer = '';
+    return;
+  }
   if (!typingBuffer) return;
-  const typedText = typingBuffer;
+  // getevent key ordering is not a reliable representation of an IME's final
+  // committed text (especially soft keyboards/autocorrect). Use it only as a
+  // trigger; UIAutomator's focused EditText is the authoritative value.
+  const keyEventText = typingBuffer;
   typingBuffer = '';
+  let focusedNow = null;
+  try {
+    const xml = await refreshCachedXmlHierarchy(deviceId);
+    focusedNow = await getFocusedElement(deviceId, xml);
+  } catch (err) {
+    console.warn('[Recorder][Typing] Could not read focused field:', err.message);
+  }
+
+  if (focusedNow) lastFocusedElement = { ...focusedNow };
+  const displayedText = focusedNow?.text;
+  const baseline = focusedTextBeforeTyping || '';
+  // Normal typing appends to the text that was in the field when it received
+  // focus. If it was replaced/autocorrected, preserve the complete visible
+  // value and explicitly mark it for replacement during playback.
+  const appendsToExistingText = typeof displayedText === 'string' && displayedText.startsWith(baseline);
+  const typedText = typeof displayedText === 'string'
+    ? (appendsToExistingText ? displayedText.slice(baseline.length) : displayedText)
+    : keyEventText;
+  const replaceText = typeof displayedText === 'string' && !appendsToExistingText;
+
+  if (!typedText && !replaceText) return;
 
   const stepPayload = {
     email: userEmail,
@@ -580,14 +754,16 @@ function flushTypingBuffer(deviceId) {
       id: Math.random().toString(36).substring(7),
       action: 'fill',
       value: typedText,
+      text: typedText,
+      replaceText,
       elementName: lastFocusedElement?.text || lastFocusedElement?.resourceId || `Input text: "${typedText}"`,
       locator: {
         primary: {
           type: lastFocusedElement?.primaryType || 'xpath',
           value: lastFocusedElement?.primaryValue || lastFocusedElement?.xpath || `//android.widget.EditText`,
           playwright: lastFocusedElement?.resourceId
-            ? `await driver.elementById("${lastFocusedElement.resourceId}").sendKeys("${typedText}");`
-            : `await driver.elementByXPath("//android.widget.EditText").sendKeys("${typedText}");`
+            ? `${replaceText ? `await driver.elementById("${lastFocusedElement.resourceId}").clear();\n` : ''}await driver.elementById("${lastFocusedElement.resourceId}").sendKeys(${JSON.stringify(typedText)});`
+            : `${replaceText ? 'await driver.elementByXPath("//android.widget.EditText").clear();\n' : ''}await driver.elementByXPath("//android.widget.EditText").sendKeys(${JSON.stringify(typedText)});`
         },
         alternatives: [
           lastFocusedElement?.resourceId ? { type: 'resource-id', value: lastFocusedElement.resourceId } : null,
@@ -600,7 +776,7 @@ function flushTypingBuffer(deviceId) {
     }
   };
 
-  console.log(`🟢 [ADB Recorded Step] Action: TYPE/FILL "${typedText}"`);
+  console.log(`🟢 [ADB Recorded Step] Action: TYPE/FILL "${typedText}" (source=${focusedNow ? 'focused-ui-node' : 'key-events'})`);
   postJson(`${serverUrl}/api/device-agent/record-event`, stepPayload).catch(() => {});
   postJson(`${serverUrl}/api/mobile/agent/record-event`, stepPayload).catch(() => {});
   postJson(`${serverUrl}/api/device-agent/upload-logs`, {
@@ -609,6 +785,7 @@ function flushTypingBuffer(deviceId) {
     type: 'info',
     url: 'ADB'
   }).catch(() => {});
+  focusedTextBeforeTyping = typeof displayedText === 'string' ? displayedText : baseline;
 }
 
 async function startAdbTouchListener(deviceId) {
@@ -757,6 +934,18 @@ async function startAdbTouchListener(deviceId) {
                 screenX = Math.max(0, Math.min(touchDeviceBounds.displayWidth, screenX));
                 screenY = Math.max(0, Math.min(touchDeviceBounds.displayHeight, screenY));
 
+                const injectedMarker = consumeInjectedTouch(screenX, screenY);
+                if (injectedMarker) {
+                  console.log(`[Recorder] Ignoring injected ${injectedMarker.kind} at (${screenX}, ${screenY}); it must not create a recording step.`);
+                  currentRawX = null;
+                  currentRawY = null;
+                  gestureStartRawX = null;
+                  gestureStartRawY = null;
+                  elementAtTouchStart = null;
+                  screenshotAtTouchStart = null;
+                  continue;
+                }
+
                 const capturedElement = elementAtTouchStart;
                 const capturedScreenshot = screenshotAtTouchStart;
                 elementAtTouchStart = null;
@@ -797,14 +986,14 @@ async function startAdbTouchListener(deviceId) {
           if (matchKey) {
             const keyName = matchKey[0];
             if (keyName === 'KEY_ENTER') {
-              flushTypingBuffer(deviceId);
+              void flushTypingBuffer(deviceId);
             } else if (keyName === 'KEY_BACKSPACE') {
               typingBuffer = typingBuffer.slice(0, -1);
             } else if (KEY_MAP[keyName]) {
               typingBuffer += KEY_MAP[keyName];
               if (typingTimer) clearTimeout(typingTimer);
               typingTimer = setTimeout(() => {
-                flushTypingBuffer(deviceId);
+                void flushTypingBuffer(deviceId);
               }, 600);
             }
           }
@@ -823,6 +1012,7 @@ async function startAdbTouchListener(deviceId) {
 
 async function handleHardwareKeyPress(deviceId, keyName, keycode) {
   try {
+    if (!isRecordingActive()) return;
     // Home and App Switch leave the app under test, so the press itself is only
     // a step when it happened while that app was in front.
     if (!isTargetInForeground()) {
@@ -870,6 +1060,11 @@ async function handleHardwareKeyPress(deviceId, keyName, keycode) {
 
 async function handlePhysicalEmulatorTap(deviceId, x, y, elementPromise, touchDownScreenshot) {
   try {
+    if (Date.now() < browserDrivenCommandUntil) {
+      console.log(`[Recorder] Ignoring getevent tap at (${x}, ${y}): browser-recorded command is authoritative.`);
+      return;
+    }
+    if (!isRecordingActive()) return;
     if (!isTargetInForeground()) {
       skipForegroundMismatch(`physical tap at (${x}, ${y})`);
       return;
@@ -879,10 +1074,22 @@ async function handlePhysicalEmulatorTap(deviceId, x, y, elementPromise, touchDo
     // Prefer the hierarchy snapshot started on touch-down. Resolving only after
     // release can identify the destination screen instead of the touched node.
     const [locatorAttr, freshScreenshot] = await Promise.all([
-      Promise.resolve(elementPromise).catch(() => null)
-        .then(value => value || getElementAtCoordinates(deviceId, x, y)),
+      // A post-release lookup can resolve a new screen, never use it to
+      // overwrite the field captured at touch-down.
+      Promise.resolve(elementPromise).catch(() => null),
       captureScreenshot(deviceId).catch(() => null)
     ]);
+
+    if (locatorAttr && /EditText$/i.test(locatorAttr.className || '')) {
+      lastFocusedElement = { ...locatorAttr };
+      focusedTextBeforeTyping = locatorAttr.text || '';
+      console.log('[Recorder][Typing] focused target latched', JSON.stringify({
+        resourceId: locatorAttr.resourceId,
+        contentDescription: locatorAttr.contentDescription,
+        textBeforeTyping: focusedTextBeforeTyping,
+        bounds: locatorAttr.bounds
+      }));
+    }
 
     const labelName = getAndroidElementName(locatorAttr) || `Unlabelled Android element`;
     const playwrightCode = locatorAttr?.playwrightScript || `await driver.touchPerform([{ action: 'tap', options: { x: ${x}, y: ${y} } }]);`;
@@ -960,6 +1167,11 @@ async function handlePhysicalEmulatorTap(deviceId, x, y, elementPromise, touchDo
 
 async function handlePhysicalEmulatorSwipe(deviceId, x1, y1, x2, y2, duration, elementPromise, touchDownScreenshot) {
   try {
+    if (Date.now() < browserDrivenCommandUntil) {
+      console.log(`[Recorder] Ignoring getevent swipe (${x1},${y1}) -> (${x2},${y2}): browser-recorded command is authoritative.`);
+      return;
+    }
+    if (!isRecordingActive()) return;
     if (!isTargetInForeground()) {
       skipForegroundMismatch(`physical swipe at (${x1},${y1}) -> (${x2},${y2})`);
       return;
@@ -1057,9 +1269,7 @@ async function startHeartbeat() {
 
       const res = await postJson(`${serverUrl}/api/mobile/agent/register`, payload);
 
-      if (res && res.recording) {
-        activeRecordingSession = res.recording;
-      }
+      activeRecordingSession = res?.recording || null;
     } catch (e) {
       console.warn(`Connection to AutomatiQA Cloud failed: ${e.message}. Retrying...`);
     }
@@ -1098,7 +1308,8 @@ async function startStreamingAndCommandPolling() {
           lastCapturedFrame = frame;
           await postJson(`${serverUrl}/api/device-agent/upload-frame`, {
             email: userEmail,
-            frame
+            frame,
+            capturedAt: Date.now()
           }).catch(() => {});
           lastUploadedFrameTime = now;
         }
@@ -1106,14 +1317,17 @@ async function startStreamingAndCommandPolling() {
 
       // 1b. Stream the real UIAutomator hierarchy so the recorder can resolve
       // taps to actual app nodes instead of raw screen coordinates.
-      if (now - lastUploadedHierarchyTime >= 1500) {
+      if (now - lastUploadedHierarchyTime >= 500) {
         lastUploadedHierarchyTime = now;
-        const xml = await dumpUiHierarchy(deviceId).catch(() => '');
+        // Publish the same pre-action cache used by ACTION_DOWN, not a second
+        // independently timed dump that can describe a different screen.
+        const xml = cachedXmlHierarchy.xml || await refreshCachedXmlHierarchy(deviceId).catch(() => '');
         if (xml) {
           await postJson(`${serverUrl}/api/device-agent/upload-hierarchy`, {
             email: userEmail,
             xml,
-            deviceId
+            deviceId,
+            capturedAt: cachedXmlHierarchy.time || Date.now()
           }).catch(() => {});
         }
       }
@@ -1175,15 +1389,61 @@ async function startStreamingAndCommandPolling() {
           let locatorPromise = null;
 
           if (action === 'click' || action === 'tap' || action === 'double_tap' || action === 'long_press') {
+            const currentScreen = await getDeviceBounds(actionDeviceId);
             const playbackXml = await refreshCachedXmlHierarchy(actionDeviceId).catch(() => '');
             const resolvedTarget = resolveRecordedTarget(playbackXml, params);
-            let tapX = resolvedTarget?.x;
-            let tapY = resolvedTarget?.y;
-            if (tapX === undefined || tapY === undefined) {
-              const screen = await runCmd(`adb -s ${actionDeviceId} shell wm size`).catch(() => ({ stdout: '' }));
-              const size = String(screen.stdout || '').match(/(\d+)x(\d+)/);
-              tapX = params.normalizedX !== undefined && size ? Math.round(Number(params.normalizedX) * Number(size[1])) : params.x;
-              tapY = params.normalizedY !== undefined && size ? Math.round(Number(params.normalizedY) * Number(size[2])) : params.y;
+            // The node verifies/labels the target, but the actual action must
+            // happen at the exact recorded touch point—not its center.
+            let tapX;
+            let tapY;
+            let clickMethod = 'exact_recorded_coordinate';
+            const targetInfo = params.target || params.node || {};
+
+            console.log('[Playback click] Recorded target:', {
+              resource_id: targetInfo.resourceId || params.resourceId || '',
+              content_desc: targetInfo.contentDescription || targetInfo.accessibilityId || params.contentDescription || params.accessibilityId || '',
+              text: targetInfo.text || params.text || '',
+              class: targetInfo.className || params.className || '',
+              recorded_bounds: params.bounds || targetInfo.bounds || params.locator?.primary?.bounds || '',
+              recorded_coordinate: { x: params.x, y: params.y },
+              normalized: { x: params.normalizedX, y: params.normalizedY }
+            });
+            if (resolvedTarget) {
+              console.log('[Playback click] Resolved target:', {
+                locator_used: resolvedTarget.locatorUsed,
+                current_bounds: resolvedTarget.bounds,
+                current_center: { x: tapX, y: tapY },
+                click_method: clickMethod,
+                distance_from_recorded: resolvedTarget.distance
+              });
+            } else {
+              console.log('[Playback click] Element lookup failed; using coordinate fallback.');
+            }
+
+            const normalizedX = Number(params.normalizedX);
+            const normalizedY = Number(params.normalizedY);
+            tapX = Number.isFinite(normalizedX) ? Math.round(normalizedX * currentScreen.displayWidth) : undefined;
+            tapY = Number.isFinite(normalizedY) ? Math.round(normalizedY * currentScreen.displayHeight) : undefined;
+            if (!Number.isFinite(tapX) || !Number.isFinite(tapY)) {
+              const recordedWidth = Number(params.screenWidth);
+              const recordedHeight = Number(params.screenHeight);
+              tapX = Number.isFinite(recordedWidth) && recordedWidth > 0
+                ? Math.round(Number(params.x) * currentScreen.displayWidth / recordedWidth)
+                : Number(params.x);
+              tapY = Number.isFinite(recordedHeight) && recordedHeight > 0
+                ? Math.round(Number(params.y) * currentScreen.displayHeight / recordedHeight)
+                : Number(params.y);
+            }
+            if (!Number.isFinite(Number(tapX)) || !Number.isFinite(Number(tapY))) {
+              throw new Error(`[Playback][Tap] No valid recorded or resolved coordinates for ${params.locator?.primary?.value || 'target'}`);
+            }
+            if (clickMethod === 'exact_recorded_coordinate') {
+              console.log('[Playback click] Resolved target:', {
+                locator_used: resolvedTarget?.locatorUsed || 'recorded_coordinate',
+                current_bounds: resolvedTarget?.bounds || '',
+                current_center: { x: tapX, y: tapY },
+                click_method: clickMethod
+              });
             }
             params.x = tapX; params.y = tapY;
             cmd = `adb -s ${actionDeviceId} shell input tap ${tapX} ${tapY}`;
@@ -1198,11 +1458,41 @@ async function startStreamingAndCommandPolling() {
               .then(xml => getElementAtCoordinates(actionDeviceId, params.x, params.y, xml || true))
               .catch(() => getElementAtCoordinates(actionDeviceId, params.x, params.y, true));
           } else if (action === 'type' || action === 'fill') {
-            const escaped = (params.text || '').replace(/ /g, '%s');
-            cmd = `adb -s ${actionDeviceId} shell input text "${escaped}"`;
-            // Text lands in the focused field, so that node identifies the step
-            const preXml = await getHierarchyBeforeGesture(actionDeviceId);
-            locatorAttr = await getFocusedElement(actionDeviceId, preXml).catch(() => null);
+            // Never type into whichever field happens to retain focus after a
+            // scroll. Re-resolve the recorded input against the *current* UI
+            // hierarchy and explicitly focus that exact element first.
+            const currentXml = await refreshCachedXmlHierarchy(actionDeviceId).catch(() => '');
+            const resolvedInput = resolveRecordedTarget(currentXml, params);
+            const intended = params.target || params.node || {};
+            const intendedName = intended.resourceId || intended.contentDescription || intended.accessibilityId || intended.text || params.locator?.primary?.value || 'recorded input';
+            if (!resolvedInput || !/EditText|TextInput|AutoCompleteTextView/i.test(resolvedInput.className || '')) {
+              throw new Error(`[Playback][Type] Refusing to type "${params.text ?? ''}" because recorded target "${intendedName}" is not a visible editable field after the current layout/scroll state.`);
+            }
+            const targetIdMatches = !intended.resourceId || resolvedInput.resourceId === intended.resourceId;
+            const targetDescMatches = !intended.contentDescription && !intended.accessibilityId || resolvedInput.contentDescription === (intended.contentDescription || intended.accessibilityId);
+            if (!targetIdMatches || !targetDescMatches) {
+              throw new Error(`[Playback][Type] Resolved field does not match recorded target "${intendedName}". Resolved resource-id="${resolvedInput.resourceId || ''}", content-desc="${resolvedInput.contentDescription || ''}". Refusing to type into a different field.`);
+            }
+            console.log('[Playback][Type] target resolved', {
+              target: intendedName,
+              locatorUsed: resolvedInput.locatorUsed,
+              currentBounds: resolvedInput.bounds,
+              className: resolvedInput.className,
+              resourceId: resolvedInput.resourceId,
+              contentDescription: resolvedInput.contentDescription,
+              text: resolvedInput.text
+            });
+            // Do not replay a character stream reconstructed from getevent.
+            // `params.text` is the committed UIAutomator value captured from
+            // the focused field. Quote it as one shell argument so names and
+            // locations retain their exact character order.
+            const inputText = String(params.text ?? params.value ?? '').replace(/ /g, '%s');
+            const shellQuotedText = `'${inputText.replace(/'/g, `'\\''`)}'`;
+            const clearFocusedField = params.replaceText === true
+              ? `adb -s ${actionDeviceId} shell input keyevent 123 && adb -s ${actionDeviceId} shell input keyevent 67 && `
+              : '';
+            cmd = `adb -s ${actionDeviceId} shell input tap ${resolvedInput.x} ${resolvedInput.y} && ${clearFocusedField}adb -s ${actionDeviceId} shell input text ${shellQuotedText}`;
+            locatorAttr = resolvedInput;
           } else if (action === 'clear') {
             cmd = `adb -s ${actionDeviceId} shell input keyevent 67`.repeat(25).replace(/adb/g, '&& adb').substring(3);
           } else if (action === 'swipe' || action === 'scroll') {
@@ -1289,6 +1579,20 @@ async function startStreamingAndCommandPolling() {
             // Do not await the hierarchy lookup before dispatching the action.
             // That lookup is intentionally a pre-action snapshot; waiting here
             // lets a stale cached dump win and delays the actual tap.
+            if (params.recordStep === false && (action === 'click' || action === 'tap' || action === 'double_tap' || action === 'long_press' || action === 'swipe' || action === 'scroll')) {
+              suppressInjectedTouchUntil = Date.now() + 1800;
+              // The React inspector has already stored the intended target and
+              // exact touch point. Block the physical event mirror long enough
+              // for ADB/getevent delivery, rather than trying to re-resolve it.
+              browserDrivenCommandUntil = Date.now() + 5000;
+              if (action === 'swipe' || action === 'scroll') {
+                // getevent reports the release endpoint for a gesture.
+                markInjectedTouch(params.x2, params.y2, action);
+              } else {
+                markInjectedTouch(params.x, params.y, action);
+                if (action === 'double_tap') markInjectedTouch(params.x, params.y, action);
+              }
+            }
             const commandResult = await runCmd(cmd);
 
             // Resolve the node after the ADB command has already been sent. The
@@ -1299,6 +1603,18 @@ async function startStreamingAndCommandPolling() {
             // Associate the event with the frame produced by this action, not
             // whatever frame happened to be cached from the prior step.
             const actionScreenshot = await captureScreenshot(actionDeviceId).catch(() => null);
+            const actionFrameCapturedAt = Date.now();
+            // A completion is valid only after its own screenshot is visible
+            // to the server. This prevents playback from verifying a stale
+            // frame and rushing into the following step.
+            if (actionScreenshot) {
+              lastCapturedFrame = actionScreenshot;
+              await postJson(`${serverUrl}/api/device-agent/upload-frame`, {
+                email: userEmail,
+                frame: actionScreenshot,
+                capturedAt: actionFrameCapturedAt
+              }).catch(() => {});
+            }
 
             await postJson(`${serverUrl}/api/device-agent/upload-logs`, {
               email: userEmail,
@@ -1313,7 +1629,8 @@ async function startStreamingAndCommandPolling() {
               await postJson(`${serverUrl}/api/device-agent/action-result`, {
                 actionId: item.id,
                 success: commandResult?.success !== false,
-                error: commandResult?.success === false ? (commandResult.stderr || commandResult.stdout || `ADB ${action} command failed`) : undefined
+                error: commandResult?.success === false ? (commandResult.stderr || commandResult.stdout || `ADB ${action} command failed`) : undefined,
+                frameCapturedAt: actionScreenshot ? actionFrameCapturedAt : undefined
               }).catch(() => {});
               continue;
             }

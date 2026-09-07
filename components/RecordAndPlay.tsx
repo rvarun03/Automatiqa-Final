@@ -793,7 +793,8 @@ const RecordAndPlay: React.FC<RecordAndPlayProps> = ({ project, user, onUpdatePr
         const waitForVerifiedDeviceFrame = async (
           previousFrame: string | null,
           expectedFrame: string,
-          timeoutMs = 30000
+          timeoutMs = 30000,
+          minimumCapturedAt = 0
         ): Promise<{ frame: string | null; verification: MobileVisualVerification | null }> => {
           const started = Date.now();
           let latestFrame: string | null = null;
@@ -803,6 +804,12 @@ const RecordAndPlay: React.FC<RecordAndPlayProps> = ({ project, user, onUpdatePr
               const response = await fetch(`/api/device-agent/live-frame?email=${encodeURIComponent(email)}`);
               const data = await response.json();
               if (data?.frame) {
+                // Do not verify an action using a frame captured before that
+                // action completed, even when the pixels happen to match.
+                if (minimumCapturedAt && Number(data.capturedAt || 0) < minimumCapturedAt) {
+                  await new Promise(resolve => setTimeout(resolve, 150));
+                  continue;
+                }
                 latestFrame = data.frame;
                 setLiveMobileFrame(data.frame);
                 // Compare every available frame, including an unchanged one:
@@ -821,14 +828,17 @@ const RecordAndPlay: React.FC<RecordAndPlayProps> = ({ project, user, onUpdatePr
 
         let lastPlaybackFrame = await waitForDeviceFrame(null);
 
-        const waitForActionCompletion = async (actionId: string, timeoutMs = 30000) => {
+        const waitForActionCompletion = async (actionId: string, timeoutMs = 30000): Promise<{ frameCapturedAt?: number }> => {
           const started = Date.now();
           while (Date.now() - started < timeoutMs) {
             const response = await fetch(`/api/device-agent/action-result/${encodeURIComponent(actionId)}`);
             const data = await response.json();
             if (data?.completed) {
               if (data.result?.success === false) throw new Error(data.result.error || 'Device action failed.');
-              return;
+              if (!data.result?.frameCapturedAt) {
+                throw new Error('Device executed the command but did not provide a post-action screenshot. Playback stopped to avoid advancing on stale UI.');
+              }
+              return data.result;
             }
             await new Promise(resolve => setTimeout(resolve, 200));
           }
@@ -858,16 +868,30 @@ const RecordAndPlay: React.FC<RecordAndPlayProps> = ({ project, user, onUpdatePr
             y: Math.round((Number(boundsMatch[2]) + Number(boundsMatch[4])) / 2)
           } : undefined);
           const action = step.action === 'dblclick' ? 'double_tap' : step.action === 'click' ? 'tap' : step.action;
+          // Migrate inspector steps recorded by older builds, where coordinates
+          // were accidentally persisted as percentages instead of pixels.
+          const legacyPercentPoint = !step.screenWidth && step.targetBox &&
+            step.targetBox.width === 1 && step.targetBox.height === 1 &&
+            typeof step.coordinates?.x === 'number' && typeof step.coordinates?.y === 'number';
           const params: any = {
             deviceId: mobileDevice,
             recordStep: false,
             locator: step.locator,
+            // TYPE must be bound to the element captured at recording time;
+            // coordinates/bounds alone are invalid after a scroll.
+            target: (step as any).target,
+            node: (step as any).node,
             bounds: (step as any).bounds,
-            normalizedX: (step as any).normalizedX,
-            normalizedY: (step as any).normalizedY
+            normalizedX: (step as any).normalizedX ?? (legacyPercentPoint ? step.coordinates!.x / 100 : undefined),
+            normalizedY: (step as any).normalizedY ?? (legacyPercentPoint ? step.coordinates!.y / 100 : undefined),
+            screenWidth: (step as any).screenWidth,
+            screenHeight: (step as any).screenHeight
           };
           if (tapCoords) { params.x = tapCoords.x; params.y = tapCoords.y; }
-          if (action === 'fill' || action === 'type') params.text = String(step.value ?? '');
+          if (action === 'fill' || action === 'type') {
+            params.text = String(step.value ?? '');
+            params.replaceText = (step as any).replaceText === true;
+          }
           if (action === 'press') params.key = step.value || 'Back';
           // Swipe is the only action that must use its recorded coordinates.
           // Keep every other action on its existing node-resolution path.
@@ -888,6 +912,7 @@ const RecordAndPlay: React.FC<RecordAndPlayProps> = ({ project, user, onUpdatePr
           const startedAt = Date.now();
           const expectedFrame = step.screenshot || targetFlow.stepScreenshots?.[step.id];
           const frameBeforeAction = lastPlaybackFrame;
+          let actionFrameCapturedAt = 0;
           if (action === 'wait') {
             const waitMs = Math.min(30000, Math.max(0, Number(step.value) || 1000));
             await new Promise(resolve => setTimeout(resolve, waitMs));
@@ -895,11 +920,12 @@ const RecordAndPlay: React.FC<RecordAndPlayProps> = ({ project, user, onUpdatePr
             const queued = await performMobileDeviceAction(email, action, params);
             if (!queued?.success) throw new Error(queued?.error || `Device rejected ${action}.`);
             if (!queued.actionId) throw new Error(`Device did not return an execution ID for ${action}.`);
-            await waitForActionCompletion(queued.actionId, 30000);
+            const completed = await waitForActionCompletion(queued.actionId, 30000);
+            actionFrameCapturedAt = Number(completed.frameCapturedAt || 0);
           }
           await new Promise(resolve => setTimeout(resolve, action === 'navigate' ? 200 : 350));
           const verified = expectedFrame
-            ? await waitForVerifiedDeviceFrame(frameBeforeAction, expectedFrame, 30000)
+            ? await waitForVerifiedDeviceFrame(frameBeforeAction, expectedFrame, 30000, actionFrameCapturedAt)
             : { frame: await waitForDeviceFrame(frameBeforeAction, 30000), verification: null };
           const actualFrame = verified.frame;
           if (!actualFrame) {
@@ -2044,12 +2070,18 @@ const RecordAndPlay: React.FC<RecordAndPlayProps> = ({ project, user, onUpdatePr
         }
       }
 
-      // Avoid duplicate clicks on the exact same element within 300ms
+      // Avoid duplicate clicks generated when an inspector-injected ADB tap is
+      // also observed by getevent. The two transports can use different
+      // locators, so compare their physical points as well as selectors.
       if (lastStep && lastStep.action === 'click' && eventData.action === 'click') {
         const currentSelector = eventData.locator?.primary?.value || eventData.selector;
         const lastSelector = lastStep.locator?.primary?.value;
-        
-        if (lastSelector && currentSelector && lastSelector === currentSelector && Date.now() - (lastStep.timestamp || 0) < 300) {
+        const currentPoint = eventData.coordinates || (typeof eventData.x === 'number' && typeof eventData.y === 'number' ? { x: eventData.x, y: eventData.y } : null);
+        const lastPoint = lastStep.coordinates || (typeof lastStep.x === 'number' && typeof lastStep.y === 'number' ? { x: lastStep.x, y: lastStep.y } : null);
+        const closeInTime = (eventData.timestamp || Date.now()) - (lastStep.timestamp || 0) < 2500;
+        const samePoint = currentPoint && lastPoint && Math.hypot(currentPoint.x - lastPoint.x, currentPoint.y - lastPoint.y) <= 12;
+
+        if (closeInTime && ((lastSelector && currentSelector && lastSelector === currentSelector) || samePoint)) {
           return prev;
         }
       }

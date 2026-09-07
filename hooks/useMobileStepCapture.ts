@@ -76,6 +76,8 @@ export function useMobileStepCapture(options: MobileStepCaptureOptions) {
           locator: step.locator,
           screen: step.screen,
           bounds: step.bounds,
+          node: step.node,
+          target: step.target,
           targetBox: step.targetBox
         } as RecordedStep];
       });
@@ -88,9 +90,11 @@ export function useMobileStepCapture(options: MobileStepCaptureOptions) {
     options.log(`[${time}] [Appium] findElement(${step.locator.primary.type}, "${step.locator.primary.value}") -> ${action}`);
 
     const bounds = elem.bounds?.match(/^\[(\d+),(\d+)\]\[(\d+),(\d+)\]$/);
-    if (!metrics?.recordOnly && options.liveFrame && bounds) {
-      const x = Math.round((Number(bounds[1]) + Number(bounds[3])) / 2);
-      const y = Math.round((Number(bounds[2]) + Number(bounds[4])) / 2);
+    if (!metrics?.recordOnly && options.liveFrame && (metrics?.coordinates || bounds)) {
+      // Preserve the physical touch point. Bounds are only a fallback for
+      // inspector controls that did not originate from a real touch.
+      const x = metrics?.coordinates?.x ?? Math.round((Number(bounds![1]) + Number(bounds![3])) / 2);
+      const y = metrics?.coordinates?.y ?? Math.round((Number(bounds![2]) + Number(bounds![4])) / 2);
       const beforeFrame = options.liveFrame;
       void performMobileDeviceAction(options.email, 'tap', {
         x, y, resourceId: elem.resourceId, xpath: elem.xpath, bounds: elem.bounds, recordStep: false
