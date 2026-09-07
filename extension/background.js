@@ -74,7 +74,19 @@ connectSocket();
 // Listen for messages from content scripts
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === 'SET_BACKEND_URL') {
-    const newUrl = message.url.replace('http', 'ws') + '/recorder';
+    let newUrl;
+    try {
+      const dashboardUrl = new URL(message.url);
+      // AI Studio/Cloud Run is HTTPS, so the extension must use secure WebSockets.
+      dashboardUrl.protocol = dashboardUrl.protocol === 'https:' ? 'wss:' : 'ws:';
+      dashboardUrl.pathname = '/recorder';
+      dashboardUrl.search = '';
+      dashboardUrl.hash = '';
+      newUrl = dashboardUrl.toString();
+    } catch (error) {
+      console.error('Invalid recorder backend URL:', message.url, error);
+      return;
+    }
     if (backendUrl !== newUrl) {
       console.log(`Updating backend URL to ${newUrl}`);
       backendUrl = newUrl;

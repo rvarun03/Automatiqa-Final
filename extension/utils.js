@@ -2,14 +2,36 @@
  * Utility functions for the QA Recorder extension
  */
 
-function generateSelector(el) {
-  if (!el) return { type: 'css', value: 'body', playwright: "page.locator('body')" };
+function generateLocatorBundle(el) {
+  if (!el) return { primary: { type: 'css', value: 'body', playwright: "page.locator('body')", clickedIndex: 0, matchCount: 1, isUnique: true, confidence: 1 }, alternatives: [] };
 
-  // 1. data-testid
-  const testId = el.getAttribute('data-testid') || el.getAttribute('data-test') || el.getAttribute('data-cy');
-  if (testId) return { type: 'data-testid', value: testId, playwright: `page.getByTestId('${testId}')` };
+  const esc = value => String(value).replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+  const cssEsc = value => window.CSS && CSS.escape ? CSS.escape(String(value)) : String(value).replace(/[^a-zA-Z0-9_-]/g, '\\$&');
+  const add = (list, type, value, playwright, resolver, confidence) => {
+    if (!value) return;
+    let matches = [];
+    try { matches = Array.from(resolver()); } catch (_) { return; }
+    const clickedIndex = matches.indexOf(el);
+    if (clickedIndex < 0 || matches.length === 0) return;
+    const indexed = matches.length > 1 ? `${playwright}.nth(${clickedIndex})` : playwright;
+    list.push({ type, value, playwright: indexed, clickedIndex, matchCount: matches.length, isUnique: matches.length === 1, confidence });
+  };
 
-  // 2. getByRole
+  const candidates = [];
+  const testAttrs = ['data-testid', 'data-test', 'test-id'];
+  for (const attr of testAttrs) {
+    const value = el.getAttribute(attr);
+    add(candidates, attr === 'data-testid' ? 'data-testid' : 'data-test', value,
+      attr === 'data-testid' ? `page.getByTestId('${esc(value)}')` : `page.locator('[${attr}="${esc(value)}"]')`,
+      () => document.querySelectorAll(`[${attr}="${cssEsc(value)}"]`), 1);
+  }
+  if (el.id && !/^\d+$/.test(el.id)) add(candidates, 'id', `#${el.id}`, `page.locator('#${esc(el.id)}')`, () => document.querySelectorAll(`#${cssEsc(el.id)}`), .99);
+  const name = el.getAttribute('name');
+  if (name) add(candidates, 'name', name, `page.locator('[name="${esc(name)}"]')`, () => document.querySelectorAll(`[name="${cssEsc(name)}"]`), .96);
+  const aria = el.getAttribute('aria-label');
+  if (aria) add(candidates, 'aria-label', aria, `page.getByLabel('${esc(aria)}', { exact: true })`, () => Array.from(document.querySelectorAll('[aria-label]')).filter(n => n.getAttribute('aria-label') === aria), .94);
+
+  // Role + accessible name.
   const roleMap = {
     'BUTTON': 'button',
     'A': 'link',
@@ -23,7 +45,7 @@ function generateSelector(el) {
     const name = el.getAttribute('aria-label') || el.title || el.innerText?.trim().substring(0, 30);
     if (name) {
         const sanitizedName = name.replace(/\s+/g, ' ').trim();
-        return { type: 'role', value: `${role}[name="${sanitizedName}"]`, playwright: `page.getByRole('${role}', { name: '${sanitizedName}' })` };
+        add(candidates, 'role', `${role}[name="${sanitizedName}"]`, `page.getByRole('${role}', { name: '${esc(sanitizedName)}', exact: true })`, () => Array.from(document.querySelectorAll(role === 'button' ? 'button,[role="button"]' : role === 'link' ? 'a,[role="link"]' : `[role="${role}"],${role === 'textbox' ? 'input,textarea' : role === 'combobox' ? 'select' : '.__never__'}`)).filter(n => ((n.getAttribute('aria-label') || n.innerText || n.getAttribute('placeholder') || n.getAttribute('value') || '').replace(/\s+/g, ' ').trim()) === sanitizedName), .92);
     }
   }
 
@@ -31,29 +53,22 @@ function generateSelector(el) {
   const text = el.innerText?.trim();
   if (text && text.length > 0 && text.length < 40 && !text.includes('\n')) {
     const sanitizedText = text.replace(/\s+/g, ' ').trim();
-    return { type: 'text', value: sanitizedText, playwright: `page.getByText('${sanitizedText}')` };
+    add(candidates, 'text', sanitizedText, `page.getByText('${esc(sanitizedText)}', { exact: true })`, () => Array.from(document.querySelectorAll('*')).filter(n => n.children.length === 0 && (n.textContent || '').replace(/\s+/g, ' ').trim() === sanitizedText), .75);
   }
 
   // 4. getByLabel (for inputs)
   if (['INPUT', 'TEXTAREA', 'SELECT'].includes(el.tagName)) {
     const ariaLabel = el.getAttribute('aria-label');
     if (ariaLabel) {
-      return {
-        type: 'label',
-        value: ariaLabel,
-        playwright: `page.getByLabel('${ariaLabel}')`
-      };
+      add(candidates, 'label', ariaLabel, `page.getByLabel('${esc(ariaLabel)}', { exact: true })`, () => Array.from(document.querySelectorAll('[aria-label]')).filter(n => n.getAttribute('aria-label') === ariaLabel), .9);
     }
     const wrappingLabel = el.closest('label');
     if (wrappingLabel) {
       const labelText = wrappingLabel.innerText
         ?.replace(el.value || '', '').trim();
       if (labelText && labelText.length > 0 && labelText.length < 50) {
-        return {
-          type: 'label',
-          value: labelText,
-          playwright: `page.getByLabel('${labelText}')`
-        };
+        const forId = wrappingLabel.getAttribute('for');
+        add(candidates, 'label', labelText, `page.getByLabel('${esc(labelText)}', { exact: true })`, () => forId ? document.querySelectorAll(`#${cssEsc(forId)}`) : wrappingLabel.querySelectorAll('input,textarea,select'), .9);
       }
     }
   }
@@ -62,17 +77,24 @@ function generateSelector(el) {
     const label = document.querySelector(`label[for="${el.id}"]`);
     if (label && label.innerText.trim()) {
         const labelText = label.innerText.trim();
-        return { type: 'label', value: labelText, playwright: `page.getByLabel('${labelText}')` };
+        add(candidates, 'label', labelText, `page.getByLabel('${esc(labelText)}', { exact: true })`, () => document.querySelectorAll(`#${cssEsc(el.id)}`), .9);
     }
   }
 
   // 5. placeholder
   const placeholder = el.getAttribute('placeholder');
-  if (placeholder) return { type: 'placeholder', value: placeholder, playwright: `page.getByPlaceholder('${placeholder}')` };
+  if (placeholder) add(candidates, 'placeholder', placeholder, `page.getByPlaceholder('${esc(placeholder)}', { exact: true })`, () => Array.from(document.querySelectorAll('[placeholder]')).filter(n => n.getAttribute('placeholder') === placeholder), .88);
+
+  for (const attr of Array.from(el.attributes || [])) {
+    if (/^(data-(?!react|vue|angular)|title$)/.test(attr.name) && !testAttrs.includes(attr.name) && attr.value && attr.value.length < 80) {
+      add(candidates, 'css', `[${attr.name}="${attr.value}"]`, `page.locator('[${attr.name}="${esc(attr.value)}"]')`, () => document.querySelectorAll(`[${attr.name}="${cssEsc(attr.value)}"]`), .82);
+    }
+  }
+
+  const stableClasses = Array.from(el.classList || []).filter(c => /^[a-zA-Z][\w-]*$/.test(c) && !/^(active|selected|hover|focus|disabled|ng-|css-|sc-)/i.test(c));
+  for (const cls of stableClasses) add(candidates, 'css', `.${cls}`, `page.locator('.${esc(cls)}')`, () => document.querySelectorAll(`.${cssEsc(cls)}`), .8);
 
   // 6. CSS selector fallback
-  if (el.id && !/^\d/.test(el.id)) return { type: 'css', value: `#${el.id}`, playwright: `page.locator('#${el.id}')` };
-  
   const getUniqueCss = (element) => {
     let path = [];
     while (element && element.nodeType === Node.ELEMENT_NODE) {
@@ -99,8 +121,15 @@ function generateSelector(el) {
   };
 
   const css = getUniqueCss(el);
-  return { type: 'css', value: css, playwright: `page.locator('${css}')` };
+  add(candidates, 'css', css, `page.locator('${esc(css)}')`, () => document.querySelectorAll(css), .65);
+  // A stable unique candidate is safer than a higher-ranked ambiguous one;
+  // among candidates with the same uniqueness, retain declared priority.
+  candidates.sort((a, b) => Number(b.isUnique && b.confidence >= .8) - Number(a.isUnique && a.confidence >= .8) || b.confidence - a.confidence);
+  const primary = candidates[0];
+  return { primary, alternatives: candidates.slice(1) };
 }
+
+function generateSelector(el) { return generateLocatorBundle(el).primary; }
 
 function getElementInfo(el) {
   if (!el) return null;
@@ -115,7 +144,8 @@ function getElementInfo(el) {
   };
   const role = el.getAttribute('role') || roleMap[el.tagName] || el.tagName.toLowerCase();
   
-  const locatorInfo = generateSelector(el);
+  const locator = generateLocatorBundle(el);
+  const locatorInfo = locator.primary;
 
   return {
     tagName: el.tagName.toLowerCase(),
@@ -127,7 +157,14 @@ function getElementInfo(el) {
     value: el.value,
     type: el.type,
     selector: locatorInfo.value,
-    locator: { primary: locatorInfo, alternatives: [] },
+    locator,
+    elementSnapshot: {
+      tagName: el.tagName.toLowerCase(), id: el.id || '', className: el.className || '', name: el.getAttribute('name') || '',
+      role, ariaLabel: el.getAttribute('aria-label') || '', textContent: (el.textContent || '').trim().substring(0, 500),
+      placeholder: el.getAttribute('placeholder') || '', title: el.getAttribute('title') || '', href: el.getAttribute('href') || '',
+      dataTestId: el.getAttribute('data-testid') || el.getAttribute('data-test') || el.getAttribute('test-id') || '',
+      outerHTML: (el.outerHTML || '').substring(0, 2000), cssSelector: locatorInfo.type === 'css' ? locatorInfo.value : ''
+    },
     rect: {
       top: rect.top,
       left: rect.left,

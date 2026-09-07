@@ -5,6 +5,7 @@
   "description": "Browser extension for QA recording actions",
   "permissions": [
     "activeTab",
+    "alarms",
     "scripting",
     "storage",
     "tabs"

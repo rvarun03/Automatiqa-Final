@@ -4494,6 +4494,7 @@ export const generateLocalOptimizedSteps = (
       elementName,
       locator: {
         primary: {
+          ...(s.locator?.primary || {}),
           type: primaryLocatorType,
           value: primaryLocatorValue,
           playwright: playwrightCode
@@ -4545,9 +4546,13 @@ export const enhanceRecordedScript = async (
       primary: {
         type: s.locator?.primary?.type || 'css',
         value: s.locator?.primary?.value || '',
-        playwright: s.locator?.primary?.playwright || ''
+        playwright: s.locator?.primary?.playwright || '',
+        clickedIndex: s.locator?.primary?.clickedIndex,
+        matchCount: s.locator?.primary?.matchCount,
+        isUnique: s.locator?.primary?.isUnique,
+        confidence: s.locator?.primary?.confidence
       },
-      alternatives: Array.isArray(s.locator?.alternatives) ? s.locator.alternatives.slice(0, 3) : []
+      alternatives: Array.isArray(s.locator?.alternatives) ? s.locator.alternatives : []
     } : undefined
   }));
 
@@ -4583,8 +4588,11 @@ export const enhanceRecordedScript = async (
        - Each output step in "optimizedSteps" must correspond to a distinct user interaction.
        - If there were repeated or redundant intermediate actions (such as clicking an input then typing into it, or duplicate micro-clicks), optimize them into a single clean action with the final text/state.
        - Preserve the exact sequential order of user actions across all visited screens.
-    2. Optimize Locators:
-       - Generate robust, accessible locators (prefer getByRole, getByLabel, getByPlaceholder, getByText, getByTestId, or clean css/xpath) for EVERY recorded step while preserving all original actions, screens, elementNames, URLs, and values.
+    2. Recorder-owned locators (NON-NEGOTIABLE):
+       - The recorder is the source of truth for element identity. Only convert the recorded action and validated locator into executable code; never re-decide which element was used.
+       - NEVER invent, replace, simplify, or reorder a primary/fallback locator. NEVER remove .nth(index), add .first(), or turn an indexed locator into an unindexed locator.
+       - If matchCount > 1 or clickedIndex is present, preserve the exact zero-based clickedIndex. Prefer a validated unique data-testid or ID already supplied; never replace it with role/text.
+       - Use the primary locator first and recorded fallbacks only if it cannot resolve. Do not use text-only locators for duplicates. Reproduce the exact recorded action on the exact recorded element.
     3. Page Object Model (POM):
        - Organize all visited pages and their corresponding actions into a comprehensive Page Object Model pattern.
     4. Match every output step in "optimizedSteps" to its corresponding input step using the EXACT "id" from the input step.
@@ -4691,16 +4699,8 @@ export const enhanceRecordedScript = async (
           action: origStep.action || aiStep.action,
           value: origStep.value !== undefined ? origStep.value : aiStep.value,
           url: origStep.url || aiStep.url,
-          locator: {
-            primary: {
-              type: aiStep.locator?.primary?.type || origStep.locator?.primary?.type || 'css',
-              value: aiStep.locator?.primary?.value || origStep.locator?.primary?.value || '',
-              playwright: aiStep.locator?.primary?.playwright || origStep.locator?.primary?.playwright || ''
-            },
-            alternatives: Array.isArray(aiStep.locator?.alternatives) && aiStep.locator.alternatives.length > 0
-              ? aiStep.locator.alternatives
-              : (origStep.locator?.alternatives || [])
-          },
+          // Element identity is recorder-owned; AI locator output is ignored.
+          locator: origStep.locator,
           masked: origStep.masked ?? aiStep.masked,
           placeholder: origStep.placeholder ?? aiStep.placeholder,
           platform: origStep.platform || aiStep.platform
