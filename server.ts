@@ -872,6 +872,7 @@ async function startServer() {
     const lastSession = Array.from(sessions.values()).pop();
     if (lastSession) {
       console.log(`Pushing active session ${lastSession.id} to new extension connection`);
+      (ws as any).activeSessionId = lastSession.id;
       ws.send(JSON.stringify({ type: 'START_RECORDING', sessionId: lastSession.id }));
     }
 
