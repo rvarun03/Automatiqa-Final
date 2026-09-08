@@ -203,6 +203,11 @@ async function getElementAtCoordinates(deviceId, x, y, preloadedXml) {
             text: getAttr('text'),
             className: nodeClass,
             clickable: isClickable,
+            enabled: getAttr('enabled') !== 'false',
+            editable: getAttr('editable') === 'true' || /EditText|TextInput|AutoCompleteTextView/i.test(nodeClass),
+            focusable: getAttr('focusable') === 'true',
+            focused: getAttr('focused') === 'true',
+            password: getAttr('password') === 'true',
             bounds: `[${x1},${y1}][${x2},${y2}]`
           };
         }
@@ -320,6 +325,10 @@ async function getElementAtCoordinates(deviceId, x, y, preloadedXml) {
       password,
       className,
       clickable: bestNodeAttributes.clickable,
+      enabled: bestNodeAttributes.enabled,
+      editable: bestNodeAttributes.editable,
+      focusable: bestNodeAttributes.focusable,
+      focused: bestNodeAttributes.focused,
       bounds,
       xpath,
       primaryType,
@@ -388,6 +397,9 @@ function parseUiNodes(xml) {
       text: getAttr('text'),
       className: getAttr('class'),
       clickable: getAttr('clickable') === 'true',
+      editable: getAttr('editable') === 'true' || /EditText|TextInput|AutoCompleteTextView/i.test(getAttr('class')),
+      focusable: getAttr('focusable') === 'true',
+      focused: getAttr('focused') === 'true',
       enabled: getAttr('enabled') !== 'false',
       visibleToUser: getAttr('visible-to-user') !== 'false',
       boundsText,
@@ -460,8 +472,45 @@ function resolveRecordedTarget(xml, params) {
     resourceId: best.node.resourceId,
     contentDescription: best.node.contentDescription,
     clickable: best.node.clickable,
+    editable: best.node.editable,
+    focusable: best.node.focusable,
+    focused: best.node.focused,
     distance: Math.round(best.distance)
   };
+}
+
+function sameEditableTarget(left, right) {
+  if (!left || !right) return false;
+  if (left.resourceId && right.resourceId) return left.resourceId === right.resourceId;
+  if (left.contentDescription && right.contentDescription) return left.contentDescription === right.contentDescription;
+  return left.className === right.className && left.bounds === right.bounds;
+}
+
+async function isKeyboardVisible(deviceId) {
+  const result = await runCmd(`adb -s ${deviceId} shell dumpsys input_method`);
+  return !!(result.success && /mInputShown=true|mIsInputViewShown=true|isInputViewShown=true/i.test(result.stdout || ''));
+}
+
+async function waitUntilInputReady(deviceId, params, initialTarget, timeoutMs = 5000) {
+  const started = Date.now();
+  let lastState = null;
+  while (Date.now() - started < timeoutMs) {
+    const xml = await refreshCachedXmlHierarchy(deviceId).catch(() => '');
+    const resolved = resolveRecordedTarget(xml, params);
+    const focused = await getFocusedElement(deviceId, xml).catch(() => null);
+    const target = resolved || initialTarget;
+    const targetMatchesFocus = sameEditableTarget(target, focused);
+    const keyboardVisible = await isKeyboardVisible(deviceId).catch(() => false);
+    lastState = { target, focused, keyboardVisible, targetMatchesFocus };
+    console.log('[MOBILE_PLAYBACK][INPUT_READY]', {
+      resourceId: target?.resourceId || '', className: target?.className || '',
+      editable: !!target?.editable || /EditText|TextInput|AutoCompleteTextView/i.test(target?.className || ''),
+      focused: targetMatchesFocus, keyboardVisible
+    });
+    if (target && targetMatchesFocus && target.enabled !== false) return lastState;
+    await new Promise(resolve => setTimeout(resolve, 150));
+  }
+  return lastState;
 }
 
 // Text typed with `adb shell input text` goes to whichever field holds focus, so
@@ -614,6 +663,7 @@ let suppressInjectedTouchUntil = 0;
 // ADB input. For that transaction, getevent is only an echo of our command and
 // must never create a second (often stale-hierarchy) step.
 let browserDrivenCommandUntil = 0;
+let activePlaybackInputTarget = null;
 const injectedTouchMarkers = [];
 
 function markInjectedTouch(x, y, kind = 'tap') {
@@ -734,7 +784,9 @@ async function flushTypingBuffer(deviceId) {
     console.warn('[Recorder][Typing] Could not read focused field:', err.message);
   }
 
-  if (focusedNow) lastFocusedElement = { ...focusedNow };
+  if (focusedNow && (!lastFocusedElement || sameEditableTarget(lastFocusedElement, focusedNow))) {
+    lastFocusedElement = { ...lastFocusedElement, ...focusedNow };
+  }
   const displayedText = focusedNow?.text;
   const baseline = focusedTextBeforeTyping || '';
   // Normal typing appends to the text that was in the field when it received
@@ -747,6 +799,7 @@ async function flushTypingBuffer(deviceId) {
   const replaceText = typeof displayedText === 'string' && !appendsToExistingText;
 
   if (!typedText && !replaceText) return;
+  const inputScreenshot = await captureScreenshot(deviceId).catch(() => null);
 
   const stepPayload = {
     email: userEmail,
@@ -756,7 +809,7 @@ async function flushTypingBuffer(deviceId) {
       value: typedText,
       text: typedText,
       replaceText,
-      elementName: lastFocusedElement?.text || lastFocusedElement?.resourceId || `Input text: "${typedText}"`,
+      elementName: lastFocusedElement?.hint || lastFocusedElement?.contentDescription || lastFocusedElement?.resourceId || `Input text: "${typedText}"`,
       locator: {
         primary: {
           type: lastFocusedElement?.primaryType || 'xpath',
@@ -772,6 +825,22 @@ async function flushTypingBuffer(deviceId) {
       },
       screen: lastTrackedActivity || "ActiveScreen",
       platform: 'mobile',
+      bounds: lastFocusedElement?.bounds,
+      node: lastFocusedElement ? {
+        resourceId: lastFocusedElement.resourceId, accessibilityId: lastFocusedElement.accessibilityId,
+        contentDescription: lastFocusedElement.contentDescription, text: lastFocusedElement.text,
+        hint: lastFocusedElement.hint, className: lastFocusedElement.className,
+        editable: true, focusable: lastFocusedElement.focusable !== false,
+        focused: true, enabled: lastFocusedElement.enabled !== false, bounds: lastFocusedElement.bounds
+      } : undefined,
+      target: lastFocusedElement ? {
+        resourceId: lastFocusedElement.resourceId, accessibilityId: lastFocusedElement.accessibilityId,
+        contentDescription: lastFocusedElement.contentDescription, text: lastFocusedElement.text,
+        hint: lastFocusedElement.hint, className: lastFocusedElement.className,
+        editable: true, focusable: lastFocusedElement.focusable !== false,
+        enabled: lastFocusedElement.enabled !== false, bounds: lastFocusedElement.bounds
+      } : undefined,
+      screenshot: inputScreenshot || lastCapturedFrame || undefined,
       timestamp: Date.now()
     }
   };
@@ -1087,6 +1156,7 @@ async function handlePhysicalEmulatorTap(deviceId, x, y, elementPromise, touchDo
         resourceId: locatorAttr.resourceId,
         contentDescription: locatorAttr.contentDescription,
         textBeforeTyping: focusedTextBeforeTyping,
+        hint: locatorAttr.hint,
         bounds: locatorAttr.bounds
       }));
     }
@@ -1462,8 +1532,15 @@ async function startStreamingAndCommandPolling() {
             // scroll. Re-resolve the recorded input against the *current* UI
             // hierarchy and explicitly focus that exact element first.
             const currentXml = await refreshCachedXmlHierarchy(actionDeviceId).catch(() => '');
-            const resolvedInput = resolveRecordedTarget(currentXml, params);
-            const intended = params.target || params.node || {};
+            const focusedInput = await getFocusedElement(actionDeviceId, currentXml).catch(() => null);
+            const activeFocusedInput = activePlaybackInputTarget && focusedInput && sameEditableTarget(activePlaybackInputTarget, focusedInput)
+              ? focusedInput
+              : null;
+            const resolvedInput = (params.useActiveInputTarget ? activeFocusedInput : null) ||
+              resolveRecordedTarget(currentXml, params) || activeFocusedInput;
+            const intended = params.useActiveInputTarget && activePlaybackInputTarget
+              ? activePlaybackInputTarget
+              : (params.target || params.node || {});
             const intendedName = intended.resourceId || intended.contentDescription || intended.accessibilityId || intended.text || params.locator?.primary?.value || 'recorded input';
             if (!resolvedInput || !/EditText|TextInput|AutoCompleteTextView/i.test(resolvedInput.className || '')) {
               throw new Error(`[Playback][Type] Refusing to type "${params.text ?? ''}" because recorded target "${intendedName}" is not a visible editable field after the current layout/scroll state.`);
@@ -1482,17 +1559,32 @@ async function startStreamingAndCommandPolling() {
               contentDescription: resolvedInput.contentDescription,
               text: resolvedInput.text
             });
+            await runCmd(`adb -s ${actionDeviceId} shell input tap ${resolvedInput.x} ${resolvedInput.y}`);
+            let ready = await waitUntilInputReady(actionDeviceId, params, resolvedInput);
+            if (!ready?.targetMatchesFocus) {
+              const retryXml = await refreshCachedXmlHierarchy(actionDeviceId).catch(() => '');
+              const retryTarget = resolveRecordedTarget(retryXml, params);
+              if (!retryTarget || !sameEditableTarget(resolvedInput, retryTarget)) {
+                throw new Error(`[Playback][Type] Input readiness timed out and the original target could not be safely re-resolved.`);
+              }
+              console.warn('[MOBILE_PLAYBACK][INPUT_RETRY] Refocusing original editable target', { resourceId: retryTarget.resourceId, reason: 'focus-not-ready' });
+              await runCmd(`adb -s ${actionDeviceId} shell input tap ${retryTarget.x} ${retryTarget.y}`);
+              ready = await waitUntilInputReady(actionDeviceId, params, retryTarget, 3000);
+              if (!ready?.targetMatchesFocus) throw new Error(`[Playback][Type] Original editable target did not become focused.`);
+            }
             // Do not replay a character stream reconstructed from getevent.
             // `params.text` is the committed UIAutomator value captured from
             // the focused field. Quote it as one shell argument so names and
             // locations retain their exact character order.
             const inputText = String(params.text ?? params.value ?? '').replace(/ /g, '%s');
             const shellQuotedText = `'${inputText.replace(/'/g, `'\\''`)}'`;
-            const clearFocusedField = params.replaceText === true
-              ? `adb -s ${actionDeviceId} shell input keyevent 123 && adb -s ${actionDeviceId} shell input keyevent 67 && `
+            const valueBeforeInput = ready?.focused?.text || '';
+            const moveCursorToEnd = `adb -s ${actionDeviceId} shell input keyevent 123`;
+            const deleteExisting = params.replaceText === true && valueBeforeInput
+              ? Array.from(valueBeforeInput).map(() => `adb -s ${actionDeviceId} shell input keyevent 67`).join(' && ')
               : '';
-            cmd = `adb -s ${actionDeviceId} shell input tap ${resolvedInput.x} ${resolvedInput.y} && ${clearFocusedField}adb -s ${actionDeviceId} shell input text ${shellQuotedText}`;
-            locatorAttr = resolvedInput;
+            cmd = `${moveCursorToEnd}${deleteExisting ? ` && ${deleteExisting}` : ''} && adb -s ${actionDeviceId} shell input text ${shellQuotedText}`;
+            locatorAttr = ready?.target || resolvedInput;
           } else if (action === 'clear') {
             cmd = `adb -s ${actionDeviceId} shell input keyevent 67`.repeat(25).replace(/adb/g, '&& adb').substring(3);
           } else if (action === 'swipe' || action === 'scroll') {
@@ -1599,6 +1691,15 @@ async function startStreamingAndCommandPolling() {
             // promise started before the tap, so it describes the tapped screen.
             if (locatorPromise) {
               locatorAttr = await locatorPromise.catch(() => null);
+            }
+            if ((action === 'click' || action === 'tap') && locatorAttr && /EditText|TextInput|AutoCompleteTextView/i.test(locatorAttr.className || '')) {
+              activePlaybackInputTarget = { ...locatorAttr };
+              console.log('[MOBILE_PLAYBACK][INPUT_SESSION] latched editable target', {
+                resourceId: locatorAttr.resourceId || '', contentDescription: locatorAttr.contentDescription || '',
+                className: locatorAttr.className || '', bounds: locatorAttr.bounds || ''
+              });
+            } else if (action !== 'fill' && action !== 'type') {
+              activePlaybackInputTarget = null;
             }
             // Associate the event with the frame produced by this action, not
             // whatever frame happened to be cached from the prior step.

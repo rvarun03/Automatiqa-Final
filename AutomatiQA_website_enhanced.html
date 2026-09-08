@@ -1,0 +1,859 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AutomatiQA — AI test automation that runs itself</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Outfit:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg: #F7FAFA;
+    --surface: #FFFFFF;
+    --ink: #0F172A;
+    --ink-soft: #4C6672;
+    --ink-faint: #7C949C;
+    --line: #D6E6E2;
+    --teal: #00BFA8;
+    --teal-deep: #008D7B;
+    --teal-bright: #00E1C5;
+    --navy: #0C1017;
+    --navy-soft: #172033;
+    --amber: #D98A3D;
+    --radius: 14px;
+  }
+
+  *{ box-sizing: border-box; }
+  html{ scroll-behavior: smooth; }
+  body{
+    margin:0;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: 'Outfit', 'Inter', -apple-system, sans-serif;
+    font-size: 16px;
+    line-height: 1.55;
+    -webkit-font-smoothing: antialiased;
+  }
+  h1,h2,h3{
+    font-family: 'Outfit', sans-serif;
+    color: var(--ink);
+    margin: 0;
+    letter-spacing: -0.01em;
+  }
+  code, .mono{ font-family: 'JetBrains Mono', monospace; }
+  a{ color: inherit; }
+  img, svg{ display:block; max-width:100%; }
+  :focus-visible{ outline: 2px solid var(--teal); outline-offset: 3px; }
+
+  .wrap{
+    max-width: 1180px;
+    margin: 0 auto;
+    padding: 0 32px;
+  }
+
+  /* ---------- Header ---------- */
+  header{
+    position: sticky;
+    top: 0;
+    z-index: 50;
+    background: rgba(242,248,247,0.88);
+    backdrop-filter: blur(8px);
+    border-bottom: 1px solid var(--line);
+  }
+  .nav{
+    display:flex;
+    align-items:center;
+    justify-content:space-between;
+    padding: 18px 0;
+  }
+  .logo{
+    display:flex;
+    align-items:center;
+    gap:9px;
+    font-family:'Outfit', sans-serif;
+    font-weight:700;
+    font-size: 1.15rem;
+    letter-spacing: -0.01em;
+  }
+  .logo .dot{
+    width: 9px; height: 9px;
+    background: var(--teal-bright);
+    border-radius: 50%;
+    box-shadow: 0 0 0 3px rgba(47,191,159,0.18);
+  }
+  .nav-links{
+    display:flex;
+    gap: 34px;
+    list-style:none;
+    margin:0; padding:0;
+    font-size: 0.94rem;
+    color: var(--ink-soft);
+  }
+  .nav-links a{ text-decoration:none; }
+  .nav-links a:hover{ color: var(--ink); }
+  .btn{
+    display:inline-flex;
+    align-items:center;
+    gap: 8px;
+    padding: 10px 20px;
+    border-radius: var(--radius);
+    font-size: 0.92rem;
+    font-weight: 500;
+    text-decoration:none;
+    border: 1px solid transparent;
+    cursor:pointer;
+    font-family:'Inter',sans-serif;
+  }
+  .btn-primary{
+    background: var(--navy);
+    color: #F2F8F7;
+  }
+  .btn-primary:hover{ background: var(--navy-soft); }
+  .btn-ghost{
+    border-color: var(--line);
+    color: var(--ink);
+    background: transparent;
+  }
+  .btn-ghost:hover{ border-color: var(--ink-faint); }
+  @media (max-width: 760px){
+    .nav-links{ display:none; }
+  }
+
+  /* ---------- Hero ---------- */
+  .hero{
+    padding: 88px 0 64px;
+  }
+  .hero-grid{
+    display:grid;
+    grid-template-columns: 1.05fr 0.95fr;
+    gap: 56px;
+    align-items:center;
+  }
+  @media (max-width: 900px){
+    .hero-grid{ grid-template-columns: 1fr; }
+    .hero{ padding: 52px 0 40px; }
+  }
+  .hero h1{
+    font-size: clamp(2.3rem, 4.4vw, 3.4rem);
+    line-height: 1.08;
+    font-weight: 700;
+  }
+  .hero p.lede{
+    margin-top: 22px;
+    max-width: 46ch;
+    color: var(--ink-soft);
+    font-size: 1.1rem;
+    line-height: 1.6;
+  }
+  .hero-actions{
+    margin-top: 34px;
+    display:flex;
+    gap: 14px;
+    flex-wrap:wrap;
+  }
+  .hero-actions .btn{ padding: 13px 24px; font-size: 0.98rem; }
+
+  /* console mockup */
+  .console{
+    background: var(--navy);
+    border-radius: 22px;
+    overflow: hidden;
+    box-shadow: 0 32px 70px -24px rgba(14,42,56,0.55);
+    border: 1px solid #243044;
+    position:relative;
+  }
+  .console::after{ content:""; position:absolute; inset:0; pointer-events:none; border-radius:inherit; box-shadow:inset 0 1px rgba(255,255,255,.06); }
+  .console-bar{
+    display:flex;
+    align-items:center;
+    gap: 7px;
+    padding: 16px 18px;
+    border-bottom: 1px solid rgba(255,255,255,0.08);
+    background:#0a0e15;
+  }
+  .window-dot{
+    flex:0 0 auto; width: 9px; height: 9px; border-radius: 50%; background: #334155;
+  }
+  .window-dot:nth-child(1){background:#fb7185}.window-dot:nth-child(2){background:#fbbf24}.window-dot:nth-child(3){background:#34d399}
+  .console-title{
+    margin-left: 7px; width:auto;
+    font-family:'JetBrains Mono',monospace;
+    font-size: 0.76rem;
+    color: #94a3b8; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+  }
+  .console-status{margin-left:auto;display:inline-flex;align-items:center;gap:6px;flex:0 0 auto;border:1px solid rgba(0,225,197,.18);border-radius:999px;padding:4px 8px;color:#5eead4;background:rgba(0,225,197,.07);font:600 .58rem 'JetBrains Mono',monospace;text-transform:uppercase;letter-spacing:.08em}
+  .console-status::before{content:"";width:5px;height:5px;border-radius:50%;background:var(--teal-bright);box-shadow:0 0 8px var(--teal-bright)}
+  .console-body{
+    padding: 25px 24px 20px;
+    font-family:'JetBrains Mono',monospace;
+    font-size: 0.78rem; line-height: 1.45;
+  }
+  .console-path{color:#64748b;font-size:.66rem;margin-bottom:10px}.console-path b{color:#94a3b8;font-weight:500}
+  .console-body .cmd{ color:#e2e8f0;background:#111827;border:1px solid #1e293b;border-radius:10px;padding:11px 13px;margin-bottom:13px; }
+  .line.cmd{display:block;border-bottom:0}
+  .console-body .cmd::before{ content:"❯ "; color:var(--teal-bright);font-weight:700; }
+  .line{
+    opacity: 0;
+    transform: translateY(4px);
+    animation: rise 0.45s ease forwards;
+    color:#cbd5e1;display:grid;grid-template-columns:18px 1fr auto;gap:7px;align-items:center;padding:8px 4px;border-bottom:1px solid rgba(148,163,184,.07);
+  }
+  .line .ok{ color:var(--teal-bright);font-weight:700; }
+  .line .ms{ color:#64748b;float:none;font-size:.67rem; }
+  .line.pending .cursor{
+    display:inline-block;
+    color: var(--amber);
+    animation: blink 1s step-start infinite;
+  }
+  .line.pending{grid-template-columns:18px 1fr auto;color:#94a3b8;border-bottom:0}.line.pending .spin{color:#fbbf24;animation:spin 1.5s linear infinite}.line.pending .ms{color:#fbbf24}
+  .console-summary{display:flex;justify-content:space-between;align-items:center;margin-top:14px;padding-top:14px;border-top:1px solid #1e293b;color:#64748b;font-size:.64rem}.console-summary strong{color:#5eead4;font-weight:600}
+  .progress-track{height:4px;background:#1e293b;border-radius:999px;margin-top:12px;overflow:hidden}.progress-fill{height:100%;width:82%;background:linear-gradient(90deg,#00bfa8,#00e1c5);border-radius:inherit;box-shadow:0 0 12px rgba(0,225,197,.55)}
+  .l1{ animation-delay: 0.15s; }
+  .l2{ animation-delay: 0.55s; }
+  .l3{ animation-delay: 0.95s; }
+  .l4{ animation-delay: 1.35s; }
+  .l5{ animation-delay: 1.75s; }
+  .l6{ animation-delay: 2.15s; }
+  @keyframes rise{ to{ opacity:1; transform:none; } }
+  @keyframes blink{ 50%{ opacity:0; } }
+  @keyframes spin{to{transform:rotate(360deg)}}
+  @media (prefers-reduced-motion: reduce){
+    .line{ animation: none; opacity:1; transform:none; }
+    .line.pending .cursor{ animation:none; }
+  }
+
+  /* tech strip */
+  .techstrip{
+    border-top: 1px solid var(--line);
+    border-bottom: 1px solid var(--line);
+    padding: 22px 0;
+  }
+  .techstrip .wrap{
+    display:flex;
+    flex-wrap:wrap;
+    gap: 12px 40px;
+    align-items:center;
+    justify-content:center;
+    color: var(--ink-faint);
+    font-size: 0.86rem;
+    font-family:'JetBrains Mono',monospace;
+  }
+
+  /* ---------- Section shell ---------- */
+  section{ padding: 84px 0; }
+  .section-head{
+    max-width: 56ch;
+    margin-bottom: 46px;
+  }
+  .section-head h2{
+    font-size: clamp(1.7rem, 2.6vw, 2.15rem);
+    font-weight: 600;
+  }
+  .section-head p{
+    margin-top: 14px;
+    color: var(--ink-soft);
+    font-size: 1.02rem;
+  }
+
+  /* ---------- Capabilities ---------- */
+  .cap-count{
+    display:inline-flex;
+    align-items:center;
+    gap:8px;
+    font-family:'JetBrains Mono',monospace;
+    font-size: 0.78rem;
+    color: var(--teal-deep);
+    background: rgba(21,127,118,0.08);
+    padding: 5px 11px;
+    border-radius: 999px;
+    margin-bottom: 18px;
+  }
+  .cap-count::before{
+    content:"";
+    width:6px; height:6px;
+    background: var(--teal-bright);
+    border-radius:50%;
+  }
+  .cap-category{
+    display:grid;
+    grid-template-columns: 280px 1fr;
+    gap: 44px;
+    padding: 44px 0;
+    border-top: 1px solid var(--line);
+  }
+  .cap-category:first-child{ border-top: none; padding-top: 0; }
+  @media (max-width: 820px){
+    .cap-category{ grid-template-columns: 1fr; gap: 18px; }
+  }
+  .cap-meta .idx{
+    font-family:'JetBrains Mono',monospace;
+    font-size: 0.82rem;
+    color: var(--teal);
+    display:block;
+    margin-bottom: 10px;
+  }
+  .cap-meta h3{
+    font-size: 1.22rem;
+    font-weight: 600;
+    margin-bottom: 8px;
+  }
+  .cap-meta p{
+    color: var(--ink-soft);
+    font-size: 0.92rem;
+    max-width: 30ch;
+    margin: 0;
+  }
+  .cap-list{ display:flex; flex-direction:column; }
+  .cap-item{
+    padding: 18px 0;
+    border-top: 1px solid var(--line);
+    display:grid;
+    grid-template-columns: 1fr 1.7fr;
+    gap: 20px;
+  }
+  .cap-item:first-child{ border-top: none; padding-top: 0; }
+  @media (max-width: 620px){
+    .cap-item{ grid-template-columns: 1fr; gap: 6px; }
+  }
+  .cap-item h4{
+    font-family:'Outfit', sans-serif;
+    font-size: 0.98rem;
+    font-weight: 600;
+    margin: 0;
+    color: var(--ink);
+  }
+  .cap-item p{
+    margin: 0;
+    color: var(--ink-soft);
+    font-size: 0.92rem;
+  }
+
+  /* ---------- How it works ---------- */
+  .steps{
+    display:grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 40px;
+    position:relative;
+  }
+  @media (max-width: 800px){
+    .steps{ grid-template-columns: 1fr; gap: 30px; }
+  }
+  .step{ position:relative; padding-left: 0; }
+  .step .num{
+    font-family:'Outfit',sans-serif;
+    font-size: 0.95rem;
+    font-weight: 700;
+    color: var(--teal);
+    border: 1px solid var(--teal);
+    width: 34px; height: 34px;
+    border-radius: 50%;
+    display:flex; align-items:center; justify-content:center;
+    margin-bottom: 18px;
+  }
+  .step h3{ font-size: 1.05rem; font-weight:600; margin-bottom: 8px; }
+  .step p{ color: var(--ink-soft); font-size: 0.95rem; margin:0; }
+
+  /* ---------- Integrations ---------- */
+  .badges{
+    display:flex;
+    flex-wrap:wrap;
+    gap: 14px;
+  }
+  .badge{
+    border: 1px solid var(--line);
+    background: var(--surface);
+    padding: 12px 20px;
+    border-radius: var(--radius);
+    font-size: 0.94rem;
+    font-weight: 500;
+    display:flex;
+    align-items:center;
+    gap: 10px;
+  }
+  .badge::before{
+    content:"";
+    width: 7px; height: 7px;
+    background: var(--teal-bright);
+    border-radius: 50%;
+  }
+
+  /* ---------- CTA ---------- */
+  .cta{
+    background: var(--navy);
+    color: #F2F8F7;
+    border-radius: 8px;
+    padding: 58px 52px;
+    display:flex;
+    align-items:center;
+    justify-content:space-between;
+    gap: 32px;
+    flex-wrap:wrap;
+  }
+  .cta h2{ color:#F2F8F7; font-size: clamp(1.5rem,2.4vw,2rem); max-width: 22ch; }
+  .cta .btn-primary{ background: var(--teal-bright); color: var(--navy); font-weight:600; }
+  .cta .btn-primary:hover{ background: #45d1af; }
+
+  /* ---------- Footer ---------- */
+  footer{
+    border-top: 1px solid var(--line);
+    padding: 36px 0 44px;
+  }
+  .foot-row{
+    display:flex;
+    justify-content:space-between;
+    align-items:center;
+    flex-wrap:wrap;
+    gap: 16px;
+    color: var(--ink-faint);
+    font-size: 0.86rem;
+  }
+
+  /* AutomatiQA product-system enhancement */
+  body{ overflow-x:hidden; background:
+    radial-gradient(circle at 80% 2%, rgba(0,225,197,.12), transparent 28rem), var(--bg); }
+  .wrap{ max-width:1240px; }
+  header{ background:rgba(12,16,23,.94); border-color:rgba(148,163,184,.14); color:#e2e8f0; }
+  .nav{ min-height:76px; padding:12px 0; }
+  .logo{ color:#fff; font-size:1.28rem; font-weight:800; }
+  .logo-mark{ width:38px; height:38px; display:grid; place-items:center; border-radius:12px;
+    color:var(--teal-bright); background:rgba(0,225,197,.1); border:1px solid rgba(0,225,197,.28); }
+  .logo-mark svg{ width:23px; height:23px; }
+  .nav-links{ color:#94a3b8; font-weight:600; }
+  .nav-links a{ padding:10px 0; position:relative; }
+  .nav-links a::after{ content:""; position:absolute; left:0; right:100%; bottom:2px; height:2px;
+    background:var(--teal-bright); transition:right .2s ease; }
+  .nav-links a:hover{ color:#fff; }
+  .nav-links a:hover::after{ right:0; }
+  .nav-actions{ display:flex; align-items:center; gap:10px; }
+  .mobile-toggle{ display:none; border:1px solid #334155; border-radius:10px; background:#111827; color:white;
+    width:42px; height:42px; font-size:1.2rem; cursor:pointer; }
+  .btn{ border-radius:12px; font-weight:700; transition:transform .2s ease, box-shadow .2s ease, background .2s ease; }
+  .btn:hover{ transform:translateY(-2px); }
+  .btn-primary{ background:var(--teal-bright); color:#061412; box-shadow:0 12px 30px rgba(0,225,197,.18); }
+  .btn-primary:hover{ background:#35efd7; }
+  .btn-dark{ background:#0f172a; color:white; }
+  .btn-ghost{ background:rgba(255,255,255,.72); }
+  .eyebrow{ display:inline-flex; align-items:center; gap:8px; padding:7px 12px; border-radius:999px;
+    background:#e6fffb; color:#007b6c; border:1px solid #baf5eb; font-size:.74rem; font-weight:800;
+    text-transform:uppercase; letter-spacing:.13em; margin-bottom:22px; }
+  .eyebrow::before{ content:""; width:7px; height:7px; border-radius:50%; background:var(--teal-bright); box-shadow:0 0 0 5px rgba(0,225,197,.12); }
+  .hero{ padding:56px 0 34px; }
+  .hero-stage{ min-height:calc(100svh - 76px); display:flex; flex-direction:column; padding:0 0 22px; }
+  .hero-stage .hero{ flex:1; display:flex; align-items:center; width:100%; padding:28px 0; }
+  .hero-stage > .wrap[aria-label="Platform highlights"]{ flex:0 0 auto; width:100%; margin-top:auto; }
+  .hero-grid{ grid-template-columns:minmax(0,1.02fr) minmax(0,.98fr); gap:clamp(36px,5vw,72px); }
+  .hero h1{ font-size:clamp(3rem,5vw,4.65rem); letter-spacing:-.055em; line-height:.96; font-weight:800; }
+  .hero h1 .accent{ color:var(--teal-deep); }
+  .hero p.lede{ max-width:57ch; font-size:1.08rem; }
+  .hero-proof{ display:flex; flex-wrap:wrap; gap:18px; margin-top:20px; color:#64748b; font-size:.82rem; font-weight:600; }
+  .hero-proof span::before{ content:"✓"; color:var(--teal-deep); margin-right:7px; font-weight:900; }
+  .console{ box-shadow:0 36px 90px -38px rgba(15,23,42,.7); transform:perspective(1100px) rotateY(-2deg) rotateX(1deg); }
+  .console-body{ min-height:350px; display:block; }
+  .techstrip{ background:#fff; }
+  section{ padding:100px 0; }
+  .soft-section{ background:#edf7f5; border-block:1px solid #d9ece8; }
+  .dark-section{ background:#0c1017; color:#cbd5e1; position:relative; overflow:hidden; }
+  .dark-section::before{ content:""; position:absolute; width:480px; height:480px; border-radius:50%;
+    right:-200px; top:-260px; background:rgba(0,225,197,.1); filter:blur(1px); }
+  .dark-section h2,.dark-section h3{ color:#fff; }
+  .dark-section .section-head p{ color:#94a3b8; }
+  .section-head .kicker{ color:var(--teal-deep); font-size:.75rem; font-weight:800; letter-spacing:.16em; text-transform:uppercase; }
+  .section-head h2{ font-size:clamp(2.1rem,3.7vw,3.35rem); line-height:1.05; letter-spacing:-.04em; margin-top:10px; font-weight:800; }
+  .section-head p{ font-size:1.08rem; }
+  .metrics{ display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); border:1px solid var(--line); border-radius:22px; background:white; overflow:hidden; }
+  .metric{ min-width:0; padding:22px 24px; border-right:1px solid var(--line); position:relative; }
+  .metric::before{ content:""; display:block; width:28px; height:3px; border-radius:99px; background:var(--teal-bright); margin-bottom:17px; }
+  .metric:last-child{ border:0; }
+  .metric strong{ display:block; font-size:1.08rem; line-height:1.2; color:#0f172a; }
+  .metric span{ display:block; margin-top:8px; color:#64748b; font-size:.75rem; line-height:1.35; font-weight:700; text-transform:uppercase; letter-spacing:.07em; overflow-wrap:anywhere; }
+  .platform-grid{ display:grid; grid-template-columns:repeat(3,1fr); gap:18px; }
+  .platform-card{ padding:30px; background:#111827; border:1px solid #263247; border-radius:20px; position:relative; }
+  .platform-card:hover{ border-color:rgba(0,225,197,.55); transform:translateY(-3px); transition:.2s ease; }
+  .platform-icon{ width:48px; height:48px; border-radius:14px; background:rgba(0,225,197,.1); color:var(--teal-bright);
+    display:grid; place-items:center; font-size:1.35rem; margin-bottom:22px; }
+  .platform-card p{ color:#94a3b8; margin:10px 0 20px; }
+  .tag-list{ display:flex; flex-wrap:wrap; gap:7px; }
+  .tag{ border:1px solid #334155; color:#cbd5e1; border-radius:999px; padding:5px 9px; font-size:.72rem; }
+  .cap-category{ border-color:#dbe8e6; }
+  .cap-item{ border-color:#dbe8e6; }
+  .cap-item h4{ font-family:'Outfit',sans-serif; }
+  .cap-item{ padding:21px 18px; border-radius:12px; transition:.2s ease; }
+  .cap-item:hover{ background:white; box-shadow:0 12px 34px rgba(15,23,42,.06); }
+  .steps{ gap:18px; }
+  .step{ padding:28px; background:white; border:1px solid var(--line); border-radius:18px; }
+  .step .num{ border:0; border-radius:11px; background:#dbfbf5; }
+  .workflow-arrow{ color:#94a3b8; font-size:1.3rem; position:absolute; top:40px; right:-17px; z-index:2; }
+  .security-grid{ display:grid; grid-template-columns:.9fr 1.1fr; gap:70px; align-items:center; }
+  .check-list{ display:grid; grid-template-columns:1fr 1fr; gap:12px; }
+  .check-item{ padding:18px; background:white; border:1px solid var(--line); border-radius:14px; font-weight:700; }
+  .check-item::before{ content:"✓"; display:inline-grid; place-items:center; width:24px; height:24px; border-radius:8px;
+    margin-right:10px; color:#006e61; background:#d7fbf4; }
+  .faq{ max-width:900px; }
+  details{ background:white; border:1px solid var(--line); border-radius:15px; margin:12px 0; padding:0 22px; }
+  summary{ list-style:none; cursor:pointer; padding:22px 34px 22px 0; font-weight:700; position:relative; }
+  summary::-webkit-details-marker{ display:none; }
+  summary::after{ content:"+"; position:absolute; right:0; color:var(--teal-deep); font-size:1.4rem; top:17px; }
+  details[open] summary::after{ content:"−"; }
+  details p{ color:#64748b; margin:0; padding:0 0 22px; }
+  .badge{ border-radius:12px; box-shadow:0 7px 22px rgba(15,23,42,.04); }
+  .cta{ border-radius:26px; padding:68px; background:linear-gradient(120deg,#0c1017,#122b2d); }
+  footer{ background:#080b10; border:0; color:#94a3b8; padding:54px 0; }
+  .footer-grid{ display:grid; grid-template-columns:1.8fr repeat(3,1fr); gap:40px; }
+  .footer-brand p{ max-width:36ch; color:#64748b; }
+  .footer-col strong{ color:white; display:block; margin-bottom:14px; }
+  .footer-col a{ color:#94a3b8; display:block; text-decoration:none; margin:8px 0; }
+  .footer-col a:hover{ color:var(--teal-bright); }
+  .footer-bottom{ margin-top:42px; padding-top:24px; border-top:1px solid #1e293b; display:flex; justify-content:space-between; gap:20px; }
+  .reveal{ opacity:0; transform:translateY(18px); transition:opacity .65s ease,transform .65s ease; }
+  .reveal.visible{ opacity:1; transform:none; }
+  @media(max-width:1100px){
+    .hero-stage{padding:0 0 18px}.hero{padding:48px 0 32px}.hero-stage .hero{padding:28px 0}.hero h1{font-size:clamp(2.8rem,5.8vw,4.1rem)}
+    .hero-grid{gap:32px}.console-body{padding-inline:18px}.line{font-size:.71rem}
+    .metrics{grid-template-columns:1fr 1fr}.metric:nth-child(2){border-right:0}.metric:nth-child(-n+2){border-bottom:1px solid var(--line)}
+  }
+  @media(max-width:900px){
+    .platform-grid{grid-template-columns:1fr}.security-grid{grid-template-columns:1fr}.footer-grid{grid-template-columns:1fr 1fr}
+    .hero-stage{display:block;min-height:calc(100svh - 76px);padding:0 0 36px}.hero-grid{grid-template-columns:1fr}.hero{padding-top:52px}.hero-stage .hero{padding:52px 0 32px}.console{transform:none;max-width:680px;width:100%;margin:6px auto 0}.workflow-arrow{display:none}
+    section{padding:78px 0}.section-head{margin-bottom:34px}.section-head h2{font-size:clamp(2rem,6vw,2.8rem)}
+    .platform-card{padding:26px}.cap-category{grid-template-columns:220px 1fr;gap:28px;padding:36px 0}
+    .security-grid{gap:38px}.cta{padding:48px 40px}.reveal{opacity:1;transform:none;transition:none}
+  }
+  @media(max-width:760px){
+    .wrap{padding:0 20px}.nav-actions>.btn{display:none}.mobile-toggle{display:block}
+    .nav-links.open{display:flex; position:absolute; top:76px; left:0; right:0; flex-direction:column; gap:0; padding:12px 20px 20px;
+      background:#0c1017; border-bottom:1px solid #263247}.nav-links.open a{display:block;padding:12px}
+    .hero h1{font-size:clamp(2.6rem,13vw,3.8rem)}section{padding:64px 0}.metrics{grid-template-columns:1fr}.metric{padding:18px 20px;border-right:0!important;border-bottom:1px solid var(--line)!important}.metric:last-child{border-bottom:0!important}
+    .metric::before{margin-bottom:12px}.cap-category{grid-template-columns:1fr;gap:18px;padding:32px 0}.cap-meta p{max-width:52ch}
+    .cap-item{grid-template-columns:1fr;gap:6px;padding:16px 14px}.steps{gap:14px}.step{padding:24px}
+    .check-list{grid-template-columns:1fr}.footer-grid{grid-template-columns:1fr}.footer-bottom{flex-direction:column}.cta{padding:38px 28px}
+    .badges{gap:10px}.badge{padding:10px 15px}.section-head{margin-bottom:28px}.section-head p{font-size:1rem}
+    details{padding:0 18px}summary{padding-block:19px}.footer-grid{gap:28px}
+  }
+  @media(max-width:420px){
+    .wrap{padding-inline:16px}.nav{min-height:68px}.nav .logo{font-size:1.05rem}.logo-mark{width:34px;height:34px}
+    .nav-links.open{top:68px}.hero-stage{min-height:calc(100svh - 68px)}.hero-stage .hero{padding:38px 0 28px}
+    .eyebrow{font-size:.62rem;letter-spacing:.1em}.hero h1{font-size:clamp(2.45rem,12.5vw,3.2rem)}.hero p.lede{font-size:1rem}
+    .hero-actions{gap:10px;margin-top:25px}.hero-actions .btn{width:100%;justify-content:center}.hero-proof{gap:9px 14px}
+    .console-bar{padding:13px 12px}.console-title{font-size:.58rem}.console-status{font-size:.5rem;padding:3px 6px}
+    .console-body{min-height:0;padding:18px 13px 16px}.console-path{font-size:.55rem}.line{font-size:.61rem;grid-template-columns:14px minmax(0,1fr) auto;padding:7px 2px}.line .ms{font-size:.54rem}.console-summary{font-size:.53rem}
+    .section-head h2{font-size:2rem}.platform-card{padding:22px}.cta{padding:32px 22px}.cta .btn{width:100%;justify-content:center}
+  }
+  @media(prefers-reduced-motion:reduce){.reveal{opacity:1;transform:none;transition:none}}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="wrap nav">
+    <a class="logo" href="#product" style="text-decoration:none"><span class="logo-mark" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none"><path d="M7 4.5 18 12 7 19.5v-15Z" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><path d="m9.5 9 4.5 3-4.5 3" stroke="currentColor" stroke-width="1.5"/></svg></span>AutomatiQA</a>
+    <ul class="nav-links" id="navLinks">
+      <li><a href="#product">Product</a></li>
+      <li><a href="#platforms">Platforms</a></li>
+      <li><a href="#capabilities">Capabilities</a></li>
+      <li><a href="#how">How it works</a></li>
+      <li><a href="#security">Security</a></li>
+    </ul>
+    <div class="nav-actions"><a href="#cta" class="btn btn-primary">Request a demo <span aria-hidden="true">→</span></a><button class="mobile-toggle" id="mobileToggle" aria-label="Open navigation" aria-expanded="false">☰</button></div>
+  </div>
+</header>
+
+<main>
+  <div class="hero-stage">
+  <section class="hero" id="product">
+    <div class="wrap hero-grid">
+      <div>
+        <span class="eyebrow">AI-native quality engineering</span>
+        <h1>Ship quality at the <span class="accent">speed of change.</span></h1>
+        <p class="lede">AutomatiQA brings requirements, AI-generated coverage, web and mobile automation, API testing, performance, execution, and reporting into one intelligent QA workspace.</p>
+        <div class="hero-actions">
+          <a href="#cta" class="btn btn-dark">Start building coverage <span aria-hidden="true">→</span></a>
+          <a href="#how" class="btn btn-ghost">See how it works</a>
+        </div>
+        <div class="hero-proof"><span>No-code recording</span><span>Human approval built in</span><span>Web + mobile</span></div>
+      </div>
+
+      <div class="console" aria-hidden="true">
+        <div class="console-bar">
+          <span class="window-dot"></span><span class="window-dot"></span><span class="window-dot"></span>
+          <span class="console-title">automatiqa / release-readiness.run</span>
+          <span class="console-status">running</span>
+        </div>
+        <div class="console-body">
+          <div class="console-path">PROJECT / <b>SPRINT 24 · RELEASE READINESS</b></div>
+          <div class="line l1 cmd">automatiqa analyze requirements --run</div>
+          <div class="line l2"><span class="ok">✓</span><span>requirements grounded with project context</span><span class="ms">RAG</span></div>
+          <div class="line l3"><span class="ok">✓</span><span>42 scenarios generated · 12 edge cases</span><span class="ms">AI</span></div>
+          <div class="line l4"><span class="ok">✓</span><span>126 test cases reviewed and approved</span><span class="ms">QA</span></div>
+          <div class="line l5"><span class="ok">✓</span><span>web, mobile and API suites synchronized</span><span class="ms">3 suites</span></div>
+          <div class="line l6 pending"><span class="spin">◌</span><span>executing release regression across devices<span class="cursor">▍</span></span><span class="ms">82%</span></div>
+          <div class="progress-track"><div class="progress-fill"></div></div>
+          <div class="console-summary"><span><strong>318 checks passed</strong> · 7 running</span><span>release confidence: 96%</span></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <div class="wrap reveal" aria-label="Platform highlights">
+    <div class="metrics">
+      <div class="metric"><strong>Requirements → Tests</strong><span>AI-assisted coverage creation</span></div>
+      <div class="metric"><strong>Human reviewed</strong><span>Approval before execution</span></div>
+      <div class="metric"><strong>Evidence included</strong><span>Logs, screenshots and reports</span></div>
+      <div class="metric"><strong>Workflow ready</strong><span>Jira, GitHub and Slack</span></div>
+    </div>
+  </div>
+  </div>
+
+  <section class="dark-section" id="platforms">
+    <div class="wrap">
+      <div class="section-head reveal">
+        <span class="kicker">One quality platform</span>
+        <h2>Every testing surface, connected.</h2>
+        <p>Build coverage from the user interface down to the services beneath it, with shared projects, evidence, execution history, and reports.</p>
+      </div>
+      <div class="platform-grid">
+        <article class="platform-card reveal"><div class="platform-icon">◫</div><h3>Web automation</h3><p>Record real browser journeys, generate durable scripts, and replay flows with visual evidence across modern browsers.</p><div class="tag-list"><span class="tag">Playwright</span><span class="tag">Selenium</span><span class="tag">Cypress</span></div></article>
+        <article class="platform-card reveal"><div class="platform-icon">▯</div><h3>Mobile testing</h3><p>Inspect Android interfaces, capture native gestures, replay Appium flows, and validate real-device behavior from one timeline.</p><div class="tag-list"><span class="tag">Appium</span><span class="tag">Android</span><span class="tag">Real devices</span></div></article>
+        <article class="platform-card reveal"><div class="platform-icon">⌁</div><h3>API &amp; performance</h3><p>Design API checks, turn collections into execution suites, generate JMeter workloads, and surface actionable bottlenecks.</p><div class="tag-list"><span class="tag">REST</span><span class="tag">JMeter</span><span class="tag">Assertions</span></div></article>
+      </div>
+    </div>
+  </section>
+
+  <section id="capabilities" class="soft-section">
+    <div class="wrap">
+      <div class="section-head">
+        <span class="kicker">Complete lifecycle coverage</span>
+        <span class="cap-count">18 features live in production</span>
+        <h2>Everything a delivery team needs, in one platform</h2>
+        <p>From the first user story to the final performance report, AutomatiQA covers the full testing lifecycle — so nothing has to be stitched together across separate tools.</p>
+      </div>
+
+      <div class="cap-category">
+        <div class="cap-meta">
+          <span class="idx">01 · AI Generation</span>
+          <h3>Turn requirements into coverage</h3>
+          <p>AI reads your source documents and drafts what a QA engineer would otherwise write by hand.</p>
+        </div>
+        <div class="cap-list">
+          <div class="cap-item">
+            <h4>AI User Story Generator</h4>
+            <p>Generates user stories directly from BRDs, SRS documents, epics, requirements, or any uploaded document.</p>
+          </div>
+          <div class="cap-item">
+            <h4>AI Scenarios</h4>
+            <p>Automatically produces functional, negative, boundary, and edge-case test scenarios from those stories.</p>
+          </div>
+          <div class="cap-item">
+            <h4>AI Test Cases</h4>
+            <p>Expands scenarios into detailed test cases with preconditions, steps, expected results, test data, priority, and severity.</p>
+          </div>
+          <div class="cap-item">
+            <h4>RAG-grounded generation</h4>
+            <p>Retrieval-augmented generation grounds every AI output in your own project documents and history, not generic prompts.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="cap-category">
+        <div class="cap-meta">
+          <span class="idx">02 · Test Management</span>
+          <h3>Keep every test organized</h3>
+          <p>A home for manual and AI-generated tests alike, with visibility for the whole team.</p>
+        </div>
+        <div class="cap-list">
+          <div class="cap-item">
+            <h4>Functional Test Cases</h4>
+            <p>Manages manual test cases — upload existing ones, track execution status, and maintain regression suites with full traceability.</p>
+          </div>
+          <div class="cap-item">
+            <h4>Project</h4>
+            <p>Organizes user stories, scenarios, test cases, and runs together under a single project workspace.</p>
+          </div>
+          <div class="cap-item">
+            <h4>Dashboard</h4>
+            <p>A single view of project health — coverage, execution status, and open issues at a glance.</p>
+          </div>
+          <div class="cap-item">
+            <h4>Report</h4>
+            <p>Consolidated execution reports across manual and automated runs, with clear pass/fail breakdowns.</p>
+          </div>
+          <div class="cap-item">
+            <h4>Export to Excel</h4>
+            <p>Exports test cases, scenarios, and results from any module to Excel for offline review or stakeholder sharing.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="cap-category">
+        <div class="cap-meta">
+          <span class="idx">03 · Automation &amp; Execution</span>
+          <h3>From script to scale</h3>
+          <p>Generate automation once, then run it wherever and whenever the team needs.</p>
+        </div>
+        <div class="cap-list">
+          <div class="cap-item">
+            <h4>Automation Script Generator</h4>
+            <p>Generates automation scripts using Playwright, Selenium, Appium, or Cypress — in JavaScript, TypeScript, Java, or Python.</p>
+          </div>
+          <div class="cap-item">
+            <h4>Record and Play</h4>
+            <p>Records user interactions on a web application to capture a flow, then generates a ready-to-run play script for it.</p>
+          </div>
+          <div class="cap-item">
+            <h4>Execution Grid</h4>
+            <p>Distributes test runs across parallel browsers and environments to cut total execution time.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="cap-category">
+        <div class="cap-meta">
+          <span class="idx">04 · API, Performance &amp; UI Quality</span>
+          <h3>Validate the complete experience</h3>
+          <p>Test the services, speed, interface, and accessibility your users depend on.</p>
+        </div>
+        <div class="cap-list">
+          <div class="cap-item">
+            <h4>API Testing</h4>
+            <p>Tests REST APIs with a request builder, authentication, validations, and response assertions — with AI scenarios generated from the API itself.</p>
+          </div>
+          <div class="cap-item">
+            <h4>Performance API Testing</h4>
+            <p>Converts an API JSON file into a JMeter-ready JMX file with configurable user load, then runs it and returns an analysis with a clear pass/fail verdict.</p>
+          </div>
+          <div class="cap-item">
+            <h4>Web Performance Testing</h4>
+            <p>Analyzes page speed, resource loading, and site performance, with concrete recommendations for improvement.</p>
+          </div>
+          <div class="cap-item">
+            <h4>UI Testing</h4>
+            <p>Validates UI elements, layouts, responsiveness, visual consistency, and accessibility.</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section id="how">
+    <div class="wrap">
+      <div class="section-head">
+        <h2>How a test suite comes together</h2>
+        <p>Three steps from a connected repo to a running suite.</p>
+      </div>
+      <div class="steps">
+        <div class="step">
+          <div class="num">1</div>
+          <h3>Connect your project</h3>
+          <p>Link a GitHub repo and Jira project so AutomatiQA understands what you're shipping and where to report on it.</p>
+          <span class="workflow-arrow" aria-hidden="true">→</span>
+        </div>
+        <div class="step">
+          <div class="num">2</div>
+          <h3>Let AI draft coverage</h3>
+          <p>AutomatiQA proposes scenarios from your app's flows. Your team reviews, edits, and approves what runs.</p>
+          <span class="workflow-arrow" aria-hidden="true">→</span>
+        </div>
+        <div class="step">
+          <div class="num">3</div>
+          <h3>Run and track results</h3>
+          <p>Playwright executes at scale across web and mobile, with results and failures surfaced in one dashboard.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section id="security" class="soft-section">
+    <div class="wrap security-grid">
+      <div class="section-head reveal" style="margin-bottom:0">
+        <span class="kicker">Control without friction</span>
+        <h2>Built for accountable quality.</h2>
+        <p>AI accelerates the work while your team stays in control. Review gates, project roles, traceability, and execution evidence keep quality decisions visible.</p>
+        <div class="hero-actions"><a href="#cta" class="btn btn-dark">Talk to our QA team</a></div>
+      </div>
+      <div class="check-list reveal">
+        <div class="check-item">Role-based access</div>
+        <div class="check-item">Human approval gates</div>
+        <div class="check-item">Project-level isolation</div>
+        <div class="check-item">Execution evidence</div>
+        <div class="check-item">Audit-ready history</div>
+        <div class="check-item">Grounded AI outputs</div>
+      </div>
+    </div>
+  </section>
+
+  <section id="integrations">
+    <div class="wrap">
+      <div class="section-head">
+        <h2>Fits into the pipeline you already have</h2>
+        <p>AutomatiQA sits alongside your existing tools instead of asking your team to move.</p>
+      </div>
+      <div class="badges">
+        <div class="badge">Jira</div>
+        <div class="badge">GitHub</div>
+        <div class="badge">Slack</div>
+        <div class="badge">Playwright</div>
+        <div class="badge">Appium</div>
+        <div class="badge">Selenium</div>
+        <div class="badge">Cypress</div>
+        <div class="badge">JMeter</div>
+      </div>
+    </div>
+  </section>
+
+  <section class="soft-section" id="faq">
+    <div class="wrap faq">
+      <div class="section-head reveal"><span class="kicker">Frequently asked</span><h2>Everything you need to get started.</h2></div>
+      <details class="reveal"><summary>Does AutomatiQA replace QA engineers?</summary><p>No. It removes repetitive drafting, scripting, and reporting work so QA engineers can focus on risk, exploratory testing, product behavior, and release decisions.</p></details>
+      <details class="reveal"><summary>Can we use existing manual test cases?</summary><p>Yes. Import and organize existing cases alongside AI-generated scenarios, then maintain execution status and traceability in the same project.</p></details>
+      <details class="reveal"><summary>Does it support both web and mobile applications?</summary><p>Yes. AutomatiQA supports browser recording and playback as well as native Android inspection, gesture capture, Appium automation, and real-device execution.</p></details>
+      <details class="reveal"><summary>Which automation frameworks are supported?</summary><p>Scripts can be generated for Playwright, Selenium, Cypress, and Appium in commonly used languages including TypeScript, JavaScript, Java, and Python.</p></details>
+      <details class="reveal"><summary>Can AI outputs be reviewed before execution?</summary><p>Yes. Human review and approval remain part of the workflow, with role-based controls determining who can create, approve, and execute testing assets.</p></details>
+    </div>
+  </section>
+
+  <section id="cta">
+    <div class="wrap">
+      <div class="cta">
+        <div><span class="kicker" style="color:#5eead4">Ready when your build is</span><h2 style="margin-top:10px">Bring AI-assisted testing into your next sprint.</h2><p style="color:#94a3b8;margin-bottom:0">See how one connected quality workspace can shorten the path from requirement to release.</p></div>
+        <a href="mailto:hello@qaoncloud.com?subject=AutomatiQA%20Demo" class="btn btn-primary">Request a demo <span aria-hidden="true">→</span></a>
+      </div>
+    </div>
+  </section>
+</main>
+
+<footer>
+  <div class="wrap">
+    <div class="footer-grid">
+      <div class="footer-brand"><div class="logo"><span class="logo-mark" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none"><path d="M7 4.5 18 12 7 19.5v-15Z" stroke="currentColor" stroke-width="2"/></svg></span>AutomatiQA</div><p>AI-native quality engineering for teams that want to move quickly without compromising confidence.</p></div>
+      <div class="footer-col"><strong>Platform</strong><a href="#platforms">Web testing</a><a href="#platforms">Mobile testing</a><a href="#capabilities">API testing</a><a href="#capabilities">Performance</a></div>
+      <div class="footer-col"><strong>Product</strong><a href="#capabilities">Capabilities</a><a href="#how">How it works</a><a href="#integrations">Integrations</a><a href="#security">Security</a></div>
+      <div class="footer-col"><strong>Company</strong><a href="mailto:hello@qaoncloud.com">Contact</a><a href="#faq">FAQ</a><a href="#cta">Request a demo</a></div>
+    </div>
+    <div class="footer-bottom"><span>A QAonCloud product · © <span id="year">2026</span> AutomatiQA</span><span>Quality engineered for continuous delivery.</span></div>
+  </div>
+</footer>
+
+<script>
+  const toggle = document.getElementById('mobileToggle');
+  const links = document.getElementById('navLinks');
+  toggle?.addEventListener('click', () => {
+    const open = links.classList.toggle('open');
+    toggle.setAttribute('aria-expanded', String(open));
+    toggle.textContent = open ? '×' : '☰';
+  });
+  links?.querySelectorAll('a').forEach(link => link.addEventListener('click', () => {
+    links.classList.remove('open'); toggle?.setAttribute('aria-expanded', 'false');
+    if (toggle) toggle.textContent = '☰';
+  }));
+  document.getElementById('year').textContent = new Date().getFullYear();
+  const revealTargets = document.querySelectorAll('.reveal, .cap-category, .step, .badge');
+  if ('IntersectionObserver' in window) {
+    const observer = new IntersectionObserver(entries => entries.forEach(entry => {
+      if (entry.isIntersecting) { entry.target.classList.add('visible'); observer.unobserve(entry.target); }
+    }), { threshold: .1 });
+    revealTargets.forEach(el => { el.classList.add('reveal'); observer.observe(el); });
+  } else revealTargets.forEach(el => el.classList.add('visible'));
+</script>
+
+</body>
+</html>

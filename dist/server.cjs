@@ -5719,6 +5719,7 @@ var generateLocalOptimizedSteps = (flowName, steps, tool = "Playwright", languag
       elementName,
       locator: {
         primary: {
+          ...s.locator?.primary || {},
           type: primaryLocatorType,
           value: primaryLocatorValue,
           playwright: playwrightCode
@@ -5761,9 +5762,13 @@ var enhanceRecordedScript = async (flowName, steps, tool, language) => {
       primary: {
         type: s.locator?.primary?.type || "css",
         value: s.locator?.primary?.value || "",
-        playwright: s.locator?.primary?.playwright || ""
+        playwright: s.locator?.primary?.playwright || "",
+        clickedIndex: s.locator?.primary?.clickedIndex,
+        matchCount: s.locator?.primary?.matchCount,
+        isUnique: s.locator?.primary?.isUnique,
+        confidence: s.locator?.primary?.confidence
       },
-      alternatives: Array.isArray(s.locator?.alternatives) ? s.locator.alternatives.slice(0, 3) : []
+      alternatives: Array.isArray(s.locator?.alternatives) ? s.locator.alternatives : []
     } : void 0
   }));
   if (isBrowser) {
@@ -5797,8 +5802,11 @@ var enhanceRecordedScript = async (flowName, steps, tool, language) => {
        - Each output step in "optimizedSteps" must correspond to a distinct user interaction.
        - If there were repeated or redundant intermediate actions (such as clicking an input then typing into it, or duplicate micro-clicks), optimize them into a single clean action with the final text/state.
        - Preserve the exact sequential order of user actions across all visited screens.
-    2. Optimize Locators:
-       - Generate robust, accessible locators (prefer getByRole, getByLabel, getByPlaceholder, getByText, getByTestId, or clean css/xpath) for EVERY recorded step while preserving all original actions, screens, elementNames, URLs, and values.
+    2. Recorder-owned locators (NON-NEGOTIABLE):
+       - The recorder is the source of truth for element identity. Only convert the recorded action and validated locator into executable code; never re-decide which element was used.
+       - NEVER invent, replace, simplify, or reorder a primary/fallback locator. NEVER remove .nth(index), add .first(), or turn an indexed locator into an unindexed locator.
+       - If matchCount > 1 or clickedIndex is present, preserve the exact zero-based clickedIndex. Prefer a validated unique data-testid or ID already supplied; never replace it with role/text.
+       - Use the primary locator first and recorded fallbacks only if it cannot resolve. Do not use text-only locators for duplicates. Reproduce the exact recorded action on the exact recorded element.
     3. Page Object Model (POM):
        - Organize all visited pages and their corresponding actions into a comprehensive Page Object Model pattern.
     4. Match every output step in "optimizedSteps" to its corresponding input step using the EXACT "id" from the input step.
@@ -5900,14 +5908,8 @@ var enhanceRecordedScript = async (flowName, steps, tool, language) => {
           action: origStep.action || aiStep.action,
           value: origStep.value !== void 0 ? origStep.value : aiStep.value,
           url: origStep.url || aiStep.url,
-          locator: {
-            primary: {
-              type: aiStep.locator?.primary?.type || origStep.locator?.primary?.type || "css",
-              value: aiStep.locator?.primary?.value || origStep.locator?.primary?.value || "",
-              playwright: aiStep.locator?.primary?.playwright || origStep.locator?.primary?.playwright || ""
-            },
-            alternatives: Array.isArray(aiStep.locator?.alternatives) && aiStep.locator.alternatives.length > 0 ? aiStep.locator.alternatives : origStep.locator?.alternatives || []
-          },
+          // Element identity is recorder-owned; AI locator output is ignored.
+          locator: origStep.locator,
           masked: origStep.masked ?? aiStep.masked,
           placeholder: origStep.placeholder ?? aiStep.placeholder,
           platform: origStep.platform || aiStep.platform
@@ -8449,6 +8451,7 @@ async function startServer() {
     const lastSession = Array.from(sessions.values()).pop();
     if (lastSession) {
       console.log(`Pushing active session ${lastSession.id} to new extension connection`);
+      ws.activeSessionId = lastSession.id;
       ws.send(JSON.stringify({ type: "START_RECORDING", sessionId: lastSession.id }));
     }
     ws.on("message", (data) => {
@@ -8678,6 +8681,8 @@ async function startServer() {
         if (el.id && !/^\d/.test(el.id)) return "#" + el.id;
         const testId = el.getAttribute("data-testid") || el.getAttribute("data-test") || el.getAttribute("data-cy");
         if (testId) return '[data-testid="' + testId + '"]';
+        const stableClass = Array.from(el.classList || []).find((className) => /^[a-zA-Z][\w-]*$/.test(className) && !/^(active|selected|hover|focus|disabled|ng-|css-|sc-)/i.test(className) && document.querySelectorAll("." + className).length === 1);
+        if (stableClass) return "." + stableClass;
         const name = el.getAttribute("name");
         if (name) {
           if (el.tagName === "INPUT" && el.type === "radio") {
@@ -8727,7 +8732,7 @@ async function startServer() {
         if (role && accName) {
           alternatives.push({
             type: "role",
-            value: '[role="' + role + '"][name="' + accName + '"]',
+            value: role + '[name="' + accName + '"]',
             playwright: `page.getByRole('${role}', { name: '${accName.replace(/'/g, "\\'")}' })`
           });
           if (!primary) primary = alternatives[alternatives.length - 1];
@@ -8736,7 +8741,7 @@ async function startServer() {
         if (placeholder) {
           alternatives.push({
             type: "placeholder",
-            value: '[placeholder="' + placeholder + '"]',
+            value: placeholder,
             playwright: `page.getByPlaceholder('${placeholder.replace(/'/g, "\\'")}')`
           });
           if (!primary) primary = alternatives[alternatives.length - 1];
@@ -8746,18 +8751,18 @@ async function startServer() {
           const labelText = labelEl.innerText.trim();
           alternatives.push({
             type: "label",
-            value: 'label:has-text("' + labelText.substring(0, 30) + '")',
+            value: labelText,
             playwright: `page.getByLabel('${labelText.replace(/'/g, "\\'")}')`
           });
           if (!primary) primary = alternatives[alternatives.length - 1];
         }
-        const testId = el.getAttribute("data-testid") || el.getAttribute("data-test") || el.getAttribute("data-cy");
+        const testAttr = el.hasAttribute("data-testid") ? "data-testid" : el.hasAttribute("data-test") ? "data-test" : el.hasAttribute("test-id") ? "test-id" : el.hasAttribute("data-cy") ? "data-test" : "";
+        const testId = testAttr ? el.getAttribute(testAttr === "data-test" && el.hasAttribute("data-cy") ? "data-cy" : testAttr) || "" : "";
         if (testId) {
-          const testIdSel = '[data-testid="' + testId + '"]';
           alternatives.push({
-            type: "testId",
-            value: testIdSel,
-            playwright: 'page.getByTestId("' + testId + '")'
+            type: testAttr,
+            value: testId,
+            playwright: testAttr === "data-testid" ? 'page.getByTestId("' + testId + '")' : `page.locator('[${testAttr === "data-test" && el.hasAttribute("data-cy") ? "data-cy" : testAttr}="${testId}"]')`
           });
           if (!primary) primary = alternatives[alternatives.length - 1];
         }
@@ -8765,7 +8770,7 @@ async function startServer() {
         if (nameAttr) {
           alternatives.push({
             type: "name",
-            value: `[name="${nameAttr}"]`,
+            value: nameAttr,
             playwright: `page.locator('[name="${nameAttr}"]')`
           });
           if (!primary) primary = alternatives[alternatives.length - 1];
@@ -8794,6 +8799,42 @@ async function startServer() {
           });
           if (!primary) primary = alternatives[alternatives.length - 1];
         }
+        const priority = { "data-testid": 1, "data-test": 1, "test-id": 1, id: 2, name: 3, "aria-label": 4, label: 4, role: 5, placeholder: 6, css: 9, xpath: 10, text: 11 };
+        const resolveCandidate = (candidate) => {
+          try {
+            if (candidate.type === "text") return Array.from(document.querySelectorAll("*")).filter((node) => node.children.length === 0 && (node.textContent || "").trim() === candidate.value);
+            if (candidate.type === "role") {
+              const match = candidate.value.match(/^([^[]+)\[name="([\s\S]*)"\]$/);
+              if (!match) return [];
+              const roleName = match[1], accessibleName = match[2];
+              const selector = roleName === "button" ? 'button,[role="button"]' : roleName === "link" ? 'a,[role="link"]' : roleName === "textbox" ? 'input,textarea,[role="textbox"]' : roleName === "combobox" ? 'select,[role="combobox"]' : `[role="${roleName}"]`;
+              return Array.from(document.querySelectorAll(selector)).filter((node) => (node.getAttribute("aria-label") || node.innerText || node.getAttribute("placeholder") || node.getAttribute("value") || "").trim().substring(0, 40) === accessibleName);
+            }
+            if (candidate.type === "placeholder") return Array.from(document.querySelectorAll("[placeholder]")).filter((node) => node.getAttribute("placeholder") === placeholder);
+            if (candidate.type === "name") return Array.from(document.querySelectorAll("[name]")).filter((node) => node.getAttribute("name") === candidate.value);
+            if (candidate.type === "label") {
+              const labels = Array.from(document.querySelectorAll("label")).filter((node) => (node.innerText || "").trim() === candidate.value);
+              return labels.map((node) => node.htmlFor ? document.getElementById(node.htmlFor) : node.querySelector("input,textarea,select")).filter(Boolean);
+            }
+            if (candidate.type === "xpath") {
+              const snapshot = document.evaluate(candidate.value, document, null, XPathResult.ORDERED_NODE_SNAPSHOT_TYPE, null);
+              return Array.from({ length: snapshot.snapshotLength }, (_, index) => snapshot.snapshotItem(index));
+            }
+            if (["data-testid", "data-test", "test-id"].includes(candidate.type)) return Array.from(document.querySelectorAll("[data-testid],[data-test],[data-cy],[test-id]")).filter((node) => node.getAttribute("data-testid") === candidate.value || node.getAttribute("data-test") === candidate.value || node.getAttribute("data-cy") === candidate.value || node.getAttribute("test-id") === candidate.value);
+            return Array.from(document.querySelectorAll(candidate.value));
+          } catch (_) {
+            return [];
+          }
+        };
+        const validated = alternatives.map((candidate) => {
+          const matches = resolveCandidate(candidate);
+          const clickedIndex = matches.indexOf(el);
+          if (clickedIndex < 0 || matches.length === 0) return null;
+          const confidence = candidate.type === "css" ? /^\.[\w-]+$/.test(candidate.value) ? 0.8 : 0.6 : Math.max(0.5, 1 - ((priority[candidate.type] || 11) - 1) * 0.045);
+          return { ...candidate, playwright: matches.length > 1 ? `${candidate.playwright}.nth(${clickedIndex})` : candidate.playwright, clickedIndex, matchCount: matches.length, isUnique: matches.length === 1, confidence };
+        }).filter(Boolean).sort((a, b) => Number(b.isUnique && b.confidence >= 0.8) - Number(a.isUnique && a.confidence >= 0.8) || (priority[a.type] || 99) - (priority[b.type] || 99));
+        primary = validated[0];
+        if (!primary) return null;
         let pwAction = primary.playwright;
         if (action === "click") pwAction += ".click()";
         else if (action === "dblclick") pwAction += ".dblclick()";
@@ -8808,7 +8849,7 @@ async function startServer() {
             ...primary,
             playwright: "await " + pwAction
           },
-          alternatives
+          alternatives: validated.slice(1)
         };
       }
       function getElementName(el) {
@@ -12392,10 +12433,11 @@ ${html}`;
         return;
       }
       if (type === "id") {
-        const escapedId = val.replace(/[!"#$%&'()*+,./:;<=>?@[\\\]^`{|}~]/g, "\\$&");
+        const idValue = val.replace(/^#/, "");
+        const escapedId = idValue.replace(/[!"#$%&'()*+,./:;<=>?@[\\\]^`{|}~]/g, "\\$&");
         candidateLocators.push({
           desc: `#${escapedId}`,
-          getLoc: (ctx = page) => ctx.locator(`[id="${val}" i], #${escapedId}`),
+          getLoc: (ctx = page) => ctx.locator(`[id="${idValue}" i], #${escapedId}`),
           isStrictPrimary: isPrimary
         });
       } else if (type === "data-testid" || type === "data-test") {
@@ -12590,9 +12632,16 @@ ${html}`;
       for (const ctx of contexts) {
         for (const candidate of candidateLocators) {
           try {
-            const loc = candidate.getLoc(ctx).first();
-            const count = await loc.count().catch(() => 0);
+            const baseLoc = candidate.getLoc(ctx);
+            const count = await baseLoc.count().catch(() => 0);
             if (count === 0) continue;
+            const definition = candidate.isStrictPrimary ? primary : [...alternatives, ...fallbacks].find((item) => item && candidate.desc.includes(String(item.value || "")));
+            const recordedIndex = Number.isInteger(definition?.clickedIndex) ? definition.clickedIndex : void 0;
+            const expectedCount = Number.isInteger(definition?.matchCount) ? definition.matchCount : void 0;
+            if (recordedIndex !== void 0 && recordedIndex >= count) continue;
+            if (expectedCount && expectedCount > 1 && recordedIndex === void 0) continue;
+            if (count > 1 && recordedIndex === void 0) continue;
+            const loc = recordedIndex !== void 0 ? baseLoc.nth(recordedIndex) : baseLoc;
             const isVis = await loc.isVisible().catch(() => false);
             if (!isVis) continue;
             console.log(`[Playback Engine] Located ready element via ${candidate.desc}`);
@@ -12750,12 +12799,34 @@ ${html}`;
                 coordinates: livePos?.coordinates || null,
                 targetBox: livePos?.targetBox || null
               };
+            } else if (action === "focus") {
+              await loc.focus({ timeout: 1500 });
+              return { success: true, coordinates: livePos?.coordinates || null, targetBox: livePos?.targetBox || null };
+            } else if (action === "press") {
+              await loc.press(String(valueToFill || "Enter"), { timeout: 3e3 });
+              return { success: true, coordinates: livePos?.coordinates || null, targetBox: livePos?.targetBox || null };
+            } else if (action === "submit") {
+              await loc.evaluate((el) => {
+                const form = el.tagName === "FORM" ? el : el.closest("form");
+                if (!form) throw new Error("Recorded submit target is not associated with a form.");
+                if (typeof form.requestSubmit === "function") form.requestSubmit();
+                else form.submit();
+              });
+              return { success: true, coordinates: livePos?.coordinates || null, targetBox: livePos?.targetBox || null };
+            } else if (action === "upload") {
+              const files = String(valueToFill || "").split(",").map((file) => file.trim()).filter(Boolean);
+              await loc.setInputFiles(files, { timeout: 3e3 });
+              return { success: true, coordinates: livePos?.coordinates || null, targetBox: livePos?.targetBox || null };
             }
           } catch (err) {
           }
         }
       }
       await page.waitForTimeout(pollIntervalMs);
+    }
+    if (primary?.value || alternatives.length > 0 || fallbacks.length > 0) {
+      const availableFallbacks = [...alternatives, ...fallbacks].map((item) => item?.value || item).filter(Boolean);
+      throw new Error(`Recorded element could not be uniquely identified. Action: ${action}. Element: ${elementName || "Unknown"}. Expected index: ${primary?.clickedIndex ?? "unique"}. Locator: ${rawSelector || "none"}. Match count: 0. Available fallbacks: ${availableFallbacks.join(", ") || "none"}`);
     }
     const domResult = await page.evaluate(({ targetText, rawSel, act, val }) => {
       let search = (targetText || rawSel || "").toLowerCase().trim();
@@ -13092,12 +13163,13 @@ ${html}`;
         let stepPassed = true;
         let stepError = "";
         let stepInteractRes = null;
+        let urlBeforeAction = page.url();
         try {
           const action = step.action;
           const selector = step.locator?.primary?.value || step.selector;
           const value = step.value;
           const elementName = step.elementName || "";
-          const urlBeforeAction = page.url();
+          urlBeforeAction = page.url();
           console.log(`[Playback Engine] Step ${i + 1}/${steps.length}: [${action.toUpperCase()}] Selector: "${selector}" Value: "${value}" Screen/URL: "${step.url || step.screen || ""}"`);
           await ensurePageFullyReady(page, 1e4);
           if (action === "navigate") {
@@ -13105,25 +13177,18 @@ ${html}`;
             if (targetNav) {
               currentUrl = await safeNavigatePage(targetNav);
             }
-          } else if (["click", "dblclick", "fill", "type", "select", "selectOption", "check", "uncheck", "hover", "focus", "clear", "scroll"].includes(action)) {
-            const stepRecordedUrl = resolveFullStepUrl(step.url, currentUrl) || resolveCandidateNavUrl(step, currentUrl);
-            if (stepRecordedUrl && /^https?:\/\//i.test(stepRecordedUrl)) {
-              const currentP = page.url() || "";
-              try {
-                const parsedCurrent = new URL(currentP);
-                const parsedRecorded = new URL(stepRecordedUrl);
-                const isDifferentPage = parsedCurrent.origin !== parsedRecorded.origin || parsedCurrent.pathname !== parsedRecorded.pathname && !parsedCurrent.pathname.endsWith(parsedRecorded.pathname) && !parsedRecorded.pathname.endsWith(parsedCurrent.pathname);
-                if (isDifferentPage) {
-                  console.log(`[Playback Engine] Multi-page sync: Navigating to step recorded page: ${stepRecordedUrl}`);
-                  currentUrl = await safeNavigatePage(stepRecordedUrl);
-                }
-              } catch (e) {
-              }
-            }
+          } else if (action === "submit") {
+            console.log("[Playback Engine] Skipping redundant captured submit event.");
+          } else if (["click", "dblclick", "fill", "type", "select", "selectOption", "check", "uncheck", "hover", "focus", "clear", "scroll", "press", "upload"].includes(action)) {
             let res2 = await findAndInteractElement(page, step, action, value);
             if (!res2.success && step.url) {
               const fallbackUrl = resolveFullStepUrl(step.url, currentUrl);
-              if (fallbackUrl && /^https?:\/\//i.test(fallbackUrl) && fallbackUrl !== page.url()) {
+              let isSameOriginRecovery = false;
+              try {
+                isSameOriginRecovery = Boolean(fallbackUrl) && new URL(fallbackUrl).origin === new URL(page.url()).origin;
+              } catch (e) {
+              }
+              if (isSameOriginRecovery && fallbackUrl !== page.url()) {
                 console.log(`[Playback Engine] Element interaction retry: Synchronizing page to recorded URL: ${fallbackUrl}`);
                 try {
                   currentUrl = await safeNavigatePage(fallbackUrl);
@@ -13136,18 +13201,6 @@ ${html}`;
             if (!res2.success) {
               stepPassed = false;
               stepError = res2.error || `Element "${elementName || selector}" was not visible or clickable.`;
-            }
-          } else if (action === "submit") {
-            const form = selector ? page.locator(selector).first() : page.locator("form").first();
-            await form.evaluate((el) => {
-              if (typeof el.requestSubmit === "function") el.requestSubmit();
-              else el.submit();
-            }, { timeout: 5e3 });
-          } else if (action === "press") {
-            if (value) {
-              const targetLoc = selector ? page.locator(selector).first() : page.keyboard;
-              await targetLoc.press(value, { timeout: 3e3 }).catch(() => {
-              });
             }
           } else if (action === "wait") {
             const waitMs = parseInt(value || "1000", 10) || 1e3;
@@ -13164,7 +13217,7 @@ ${html}`;
               }
             }
           }
-          if (["click", "dblclick", "submit", "press"].includes(action)) {
+          if (["click", "dblclick", "press"].includes(action)) {
             await page.waitForURL((url) => url.toString() !== urlBeforeAction, { timeout: 4e3 }).catch(() => {
             });
             await ensurePageFullyReady(page, 8e3);
@@ -13176,6 +13229,13 @@ ${html}`;
         const resultingUrl = page.url() || currentUrl;
         currentUrl = resultingUrl;
         const pageTitle = await page.title().catch(() => "");
+        const geometryMatchesScreenshot = (() => {
+          try {
+            return new URL(resultingUrl).href === new URL(urlBeforeAction).href;
+          } catch {
+            return resultingUrl === urlBeforeAction;
+          }
+        })();
         let screenshotBase64 = "";
         try {
           const shotBuf = await page.screenshot({ type: "jpeg", quality: 50, fullPage: false, timeout: 1500, animations: "disabled" });
@@ -13198,9 +13258,10 @@ ${html}`;
           resultingUrl: resultingUrl || step.url || currentUrl,
           pageTitle,
           screenshot: screenshotBase64,
+          geometryMatchesScreenshot,
           redirectChain: redirectLog.slice(-2),
-          coordinates: stepInteractRes?.coordinates || (typeof step.x === "number" && typeof step.y === "number" ? { x: step.x, y: step.y } : null),
-          targetBox: stepInteractRes?.targetBox || step.targetBox || null
+          coordinates: geometryMatchesScreenshot ? stepInteractRes?.coordinates || (typeof step.x === "number" && typeof step.y === "number" ? { x: step.x, y: step.y } : null) : null,
+          targetBox: geometryMatchesScreenshot ? stepInteractRes?.targetBox || step.targetBox || null : null
         };
         results.push(resultItem);
         sendEvent("step_result", { result: resultItem });
@@ -15997,6 +16058,7 @@ ${file.patch}
   const registeredMobileAgents = /* @__PURE__ */ new Map();
   const activeMobileSessions = /* @__PURE__ */ new Map();
   const pendingActionsMap = /* @__PURE__ */ new Map();
+  const mobileActionResults = /* @__PURE__ */ new Map();
   function generateDefaultAppFrame(packageName, appTitle) {
     let title = appTitle;
     if (!title) {
@@ -16332,11 +16394,11 @@ pause
     const email = (req.query.email || "shanmugapriya@qaoncloud.com").toLowerCase();
     const session = activeMobileSessions.get(email);
     if (session && session.lastFrame) {
-      return res.json({ success: true, frame: session.lastFrame });
+      return res.json({ success: true, frame: session.lastFrame, capturedAt: session.lastFrameCapturedAt });
     }
     const agent = getMobileAgent(email);
     if (agent && agent.lastFrame) {
-      return res.json({ success: true, frame: agent.lastFrame });
+      return res.json({ success: true, frame: agent.lastFrame, capturedAt: agent.lastFrameCapturedAt });
     }
     return res.json({
       success: false,
@@ -16345,17 +16407,19 @@ pause
     });
   });
   app2.post(["/api/device-agent/upload-frame", "/api/mobile/agent/upload-frame"], (req, res) => {
-    const { email, frame, image } = req.body;
+    const { email, frame, image, capturedAt } = req.body;
     const userEmail = (email || "sowbarnya@qaoncloud.com").toLowerCase();
     const frameData = frame || image;
     if (frameData) {
       const session = activeMobileSessions.get(userEmail) || (activeMobileSessions.size === 1 ? Array.from(activeMobileSessions.values())[0] : void 0);
       if (session) {
         session.lastFrame = frameData;
+        session.lastFrameCapturedAt = Number.isFinite(Number(capturedAt)) ? Number(capturedAt) : Date.now();
       }
       const agent = registeredMobileAgents.get(userEmail);
       if (agent) {
         agent.lastFrame = frameData;
+        agent.lastFrameCapturedAt = session?.lastFrameCapturedAt || Date.now();
       }
       try {
         io.emit("MOBILE_FRAME", { frame: frameData, email: session?.email || userEmail });
@@ -16363,6 +16427,20 @@ pause
       }
     }
     res.json({ success: true });
+  });
+  app2.post(["/api/device-agent/upload-hierarchy", "/api/mobile/agent/upload-hierarchy"], (req, res) => {
+    const { email, xml, deviceId, capturedAt } = req.body || {};
+    const userEmail = (email || "sowbarnya@qaoncloud.com").toLowerCase();
+    if (typeof xml !== "string" || !xml.includes("<hierarchy")) {
+      return res.status(400).json({ success: false, error: "Valid UIAutomator hierarchy XML is required." });
+    }
+    const session = activeMobileSessions.get(userEmail) || (activeMobileSessions.size === 1 ? Array.from(activeMobileSessions.values())[0] : void 0);
+    if (session) {
+      session.pageSourceXml = xml;
+      session.pageSourceCapturedAt = Number.isFinite(Number(capturedAt)) ? Number(capturedAt) : Date.now();
+      if (deviceId) session.deviceId = deviceId;
+    }
+    res.json({ success: true, capturedAt: session?.pageSourceCapturedAt || Date.now() });
   });
   const deviceLogsBuffer = /* @__PURE__ */ new Map();
   app2.post(["/api/device-agent/upload-logs", "/api/mobile/agent/upload-logs"], (req, res) => {
@@ -16479,19 +16557,37 @@ pause
     if (!pendingActionsMap.has(queueEmail)) {
       pendingActionsMap.set(queueEmail, []);
     }
+    const actionId = Math.random().toString(36).substring(7);
     pendingActionsMap.get(queueEmail).push({
-      id: Math.random().toString(36).substring(7),
+      id: actionId,
       action: action || "tap",
       params: params || {},
       timestamp: Date.now()
     });
-    res.json({ success: true, message: `Action ${action} queued for agent` });
+    res.json({ success: true, actionId, message: `Action ${action} queued for agent` });
+  });
+  app2.post("/api/device-agent/action-result", (req, res) => {
+    const { actionId, success, error, frameCapturedAt } = req.body || {};
+    if (!actionId) return res.status(400).json({ success: false, error: "actionId is required" });
+    mobileActionResults.set(actionId, { success: success !== false, error, completedAt: Date.now(), frameCapturedAt: Number.isFinite(Number(frameCapturedAt)) ? Number(frameCapturedAt) : void 0 });
+    res.json({ success: true });
+  });
+  app2.get("/api/device-agent/action-result/:actionId", (req, res) => {
+    const result = mobileActionResults.get(req.params.actionId);
+    if (result) mobileActionResults.delete(req.params.actionId);
+    res.json({ success: true, completed: !!result, result: result || null });
   });
   app2.get("/api/device-agent/pending-actions", (req, res) => {
     const email = (req.query.email || "sowbarnya@qaoncloud.com").toLowerCase();
     const queue = pendingActionsMap.get(email) || [];
     pendingActionsMap.set(email, []);
     res.json({ success: true, actions: queue });
+  });
+  app2.post("/api/device-agent/clear-pending-actions", (req, res) => {
+    const userEmail = (req.body?.email || req.query.email || "sowbarnya@qaoncloud.com").toLowerCase();
+    const agent = getMobileAgent(userEmail);
+    pendingActionsMap.set(agent?.email || userEmail, []);
+    res.json({ success: true });
   });
   app2.post(["/api/device-agent/record-event", "/api/mobile/agent/record-event"], (req, res) => {
     const { email, event } = req.body;
@@ -16501,6 +16597,9 @@ pause
       const stepData = eventPayload.event || eventPayload;
       const directSession = activeMobileSessions.get(agentEmail);
       const session = directSession || (activeMobileSessions.size === 1 ? Array.from(activeMobileSessions.values())[0] : void 0);
+      if (!session || session.status !== "RUNNING") {
+        return res.json({ success: true, ignored: true, reason: "No active mobile recording session" });
+      }
       const sessionEmail = session?.email || agentEmail;
       const agentFrame = registeredMobileAgents.get(agentEmail)?.lastFrame;
       const broadcastStep = {
@@ -16541,6 +16640,42 @@ pause
       session.recordedSteps = [];
     }
     res.json({ success: true });
+  });
+  app2.post("/api/mobile/session/start", (req, res) => {
+    const { email, deviceId, sessionId } = req.body || {};
+    const userEmail = (email || "sowbarnya@qaoncloud.com").toLowerCase();
+    const previous = activeMobileSessions.get(userEmail);
+    const agent = getMobileAgent(userEmail);
+    const session = {
+      email: userEmail,
+      deviceId: deviceId || previous?.deviceId || agent?.devices?.[0]?.deviceId || "emulator-5554",
+      packageName: previous?.packageName,
+      launchActivity: previous?.launchActivity,
+      status: "RUNNING",
+      lastFrame: previous?.lastFrame || agent?.lastFrame,
+      pageSourceXml: previous?.pageSourceXml,
+      logs: [{
+        timestamp: (/* @__PURE__ */ new Date()).toLocaleTimeString(),
+        level: "INFO",
+        message: `Recording session ${sessionId || "current"} attached without changing device state`
+      }],
+      recordedSteps: []
+    };
+    activeMobileSessions.set(userEmail, session);
+    res.json({ success: true, sessionId, session });
+  });
+  app2.post(["/api/device-agent/stop-recording", "/api/mobile/session/stop"], (req, res) => {
+    const userEmail = (req.body?.email || req.query.email || "sowbarnya@qaoncloud.com").toLowerCase();
+    const session = activeMobileSessions.get(userEmail);
+    if (session) {
+      session.status = "IDLE";
+      session.logs.push({
+        timestamp: (/* @__PURE__ */ new Date()).toLocaleTimeString(),
+        level: "INFO",
+        message: "Mobile recording stopped; playback/input gestures are not recordable."
+      });
+    }
+    res.json({ success: true, recording: null });
   });
   app2.post(["/api/device-agent/update-status", "/api/mobile/agent/update-status"], (req, res) => {
     res.json({ success: true });
@@ -16592,7 +16727,7 @@ pause
     res.json({
       success: true,
       message: "Mobile Execution Agent registered successfully",
-      recording: activeSession ? {
+      recording: activeSession?.status === "RUNNING" ? {
         deviceId: activeSession.deviceId,
         appPackage: activeSession.packageName,
         status: activeSession.status === "RUNNING" ? "Recording" : "Starting"
@@ -16633,7 +16768,7 @@ pause
     res.json({
       success: true,
       registered: true,
-      recording: activeSession ? {
+      recording: activeSession?.status === "RUNNING" ? {
         deviceId: activeSession.deviceId,
         appPackage: activeSession.packageName,
         status: activeSession.status === "RUNNING" ? "Recording" : "Starting"
@@ -16933,24 +17068,13 @@ pause
     if (session && session.pageSourceXml) {
       return res.json({
         success: true,
-        xml: session.pageSourceXml
+        xml: session.pageSourceXml,
+        capturedAt: session.pageSourceCapturedAt
       });
     }
-    const pkg = session?.packageName || "com.uploaded.application";
-    const dynamicXml = `<hierarchy rotation="0">
-  <android.widget.FrameLayout bounds="[0,0][1080,2400]">
-    <android.widget.LinearLayout bounds="[0,80][1080,2320]">
-      <android.widget.TextView resource-id="${pkg}:id/title_text" text="Welcome to Mobile Application" bounds="[90,340][990,720]" clickable="false" enabled="true"/>
-      <android.widget.EditText resource-id="${pkg}:id/input_user" content-desc="input_user" text="user@domain.com" bounds="[90,810][990,930]" clickable="true" enabled="true"/>
-      <android.widget.EditText resource-id="${pkg}:id/input_password" content-desc="input_password" text="" bounds="[90,1020][990,1140]" clickable="true" enabled="true"/>
-      <android.widget.Button resource-id="${pkg}:id/btn_login" content-desc="btn_login" text="SIGN IN / GET STARTED" bounds="[90,1190][990,1320]" clickable="true" enabled="true"/>
-      <android.widget.Button resource-id="${pkg}:id/btn_explore" content-desc="btn_explore" text="EXPLORE COURTS &amp; ARENA" bounds="[90,1350][990,1480]" clickable="true" enabled="true"/>
-    </android.widget.LinearLayout>
-  </android.widget.FrameLayout>
-</hierarchy>`;
-    res.json({
-      success: true,
-      xml: dynamicXml
+    res.status(503).json({
+      success: false,
+      error: "Waiting for the device UI hierarchy snapshot."
     });
   });
   app2.post("/api/mobile/app/action", (req, res) => {

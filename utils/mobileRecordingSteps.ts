@@ -78,6 +78,10 @@ export function buildMobileRecordedStep(
       className: elem.type,
       clickable: elem.clickable,
       enabled: elem.enabled,
+      editable: elem.editable,
+      focusable: elem.focusable,
+      focused: elem.focused,
+      hint: elem.hint,
       bounds: elem.bounds
     },
     target: {
@@ -88,6 +92,10 @@ export function buildMobileRecordedStep(
       className: elem.type,
       clickable: elem.clickable,
       enabled: elem.enabled,
+      editable: elem.editable,
+      focusable: elem.focusable,
+      focused: elem.focused,
+      hint: elem.hint,
       bounds: elem.bounds
     },
     targetBox: metrics?.targetBox,

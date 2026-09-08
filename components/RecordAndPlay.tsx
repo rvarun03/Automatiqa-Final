@@ -799,6 +799,14 @@ const RecordAndPlay: React.FC<RecordAndPlayProps> = ({ project, user, onUpdatePr
       const email = user?.email || DEFAULT_MOBILE_USER_EMAIL;
       let activeMobileStep: RecordedStep | null = null;
       try {
+        // Playback must never depend on the recorder observing and re-emitting
+        // its own injected taps/keys. Explicitly disable mobile capture before
+        // executing the saved semantic steps.
+        await fetch('/api/device-agent/stop-recording', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email })
+        }).catch(() => {});
         // Discard commands left over from recording/previous playback before
         // executing the first step. Do not change the current device screen.
         await clearPendingMobileDeviceActions(email).catch(() => {});
@@ -888,8 +896,15 @@ const RecordAndPlay: React.FC<RecordAndPlayProps> = ({ project, user, onUpdatePr
           }
           const step = steps[i];
           activeMobileStep = step;
-          if (step.skipped) {
+          const isTransientMobileStep = step.action === 'hover' || step.action === 'focus' || step.action === 'blur';
+          if (step.skipped || isTransientMobileStep) {
             setStepExecutionStatus(prev => ({ ...prev, [step.id]: 'skipped' }));
+            if (isTransientMobileStep) {
+              setPlaybackLogs(prev => [...prev, {
+                timestamp: new Date().toLocaleTimeString(), level: 'info',
+                message: `⏭️ Skipped transient mobile ${step.action.toUpperCase()} step; focus is verified by the following input action.`
+              }]);
+            }
             continue;
           }
           setCurrentPlaybackStepIndex(i);
@@ -902,7 +917,34 @@ const RecordAndPlay: React.FC<RecordAndPlayProps> = ({ project, user, onUpdatePr
             x: Math.round((Number(boundsMatch[1]) + Number(boundsMatch[3])) / 2),
             y: Math.round((Number(boundsMatch[2]) + Number(boundsMatch[4])) / 2)
           } : undefined);
-          const action = step.action === 'dblclick' ? 'double_tap' : step.action === 'click' ? 'tap' : step.action;
+          const recordedTarget = (step as any).target || (step as any).node || {};
+          const recordedClass = String(recordedTarget.className || (step as any).className || '');
+          const recordedValue = String(step.value ?? '');
+          // Older Android recordings sometimes classified the first IME key as
+          // CLICK and attached a hierarchy node captured during keyboard
+          // relayout. Treat only a single-character click on an editable class
+          // as input; ordinary taps remain untouched.
+          const isLegacyCharacterClick = step.action === 'click' &&
+            /EditText|TextInput|AutoCompleteTextView/i.test(recordedClass) &&
+            Array.from(recordedValue).length === 1;
+          const action = isLegacyCharacterClick
+            ? 'fill'
+            : step.action === 'dblclick' ? 'double_tap' : step.action === 'click' ? 'tap' : step.action;
+          const nextStep = steps[i + 1];
+          const nextRecordedTarget = (nextStep as any)?.target || (nextStep as any)?.node || {};
+          const nextRecordedClass = String(nextRecordedTarget.className || (nextStep as any)?.className || '');
+          const nextRecordedValue = String(nextStep?.value ?? '');
+          const nextIsRecordedInput = nextStep && (
+            nextStep.action === 'fill' ||
+            nextStep.action === 'type' ||
+            (nextStep.action === 'click' &&
+              /EditText|TextInput|AutoCompleteTextView/i.test(nextRecordedClass) &&
+              Array.from(nextRecordedValue).length === 1)
+          );
+          // A tap directly before an input step exists only to place the caret.
+          // Execute it, but do not compare its screenshot: the blinking cursor
+          // and keyboard relayout make that intermediate frame nondeterministic.
+          const isCursorFocusTap = action === 'tap' && Boolean(nextIsRecordedInput);
           // Migrate inspector steps recorded by older builds, where coordinates
           // were accidentally persisted as percentages instead of pixels.
           const legacyPercentPoint = !step.screenWidth && step.targetBox &&
@@ -926,6 +968,7 @@ const RecordAndPlay: React.FC<RecordAndPlayProps> = ({ project, user, onUpdatePr
           if (action === 'fill' || action === 'type') {
             params.text = String(step.value ?? '');
             params.replaceText = (step as any).replaceText === true;
+            params.useActiveInputTarget = isLegacyCharacterClick;
           }
           if (action === 'press') params.key = step.value || 'Back';
           // Swipe is the only action that must use its recorded coordinates.
@@ -959,6 +1002,20 @@ const RecordAndPlay: React.FC<RecordAndPlayProps> = ({ project, user, onUpdatePr
             actionFrameCapturedAt = Number(completed.frameCapturedAt || 0);
           }
           await new Promise(resolve => setTimeout(resolve, action === 'navigate' ? 200 : 350));
+          if (isCursorFocusTap) {
+            const cursorFrame = await waitForDeviceFrame(frameBeforeAction, 3000);
+            if (cursorFrame) {
+              lastPlaybackFrame = cursorFrame;
+              setPlaybackStepScreenshots(prev => ({ ...prev, [step.id]: cursorFrame }));
+            }
+            setStepExecutionStatus(prev => ({ ...prev, [step.id]: 'skipped' }));
+            setStepExecutionTime(prev => ({ ...prev, [step.id]: Date.now() - startedAt }));
+            setPlaybackLogs(prev => [...prev, {
+              timestamp: new Date().toLocaleTimeString(), level: 'info',
+              message: `⏭️ Device step ${i + 1}/${steps.length}: cursor focus tap executed; visual verification skipped.`
+            }]);
+            continue;
+          }
           const verified = expectedFrame
             ? await waitForVerifiedDeviceFrame(frameBeforeAction, expectedFrame, 30000, actionFrameCapturedAt)
             : { frame: await waitForDeviceFrame(frameBeforeAction, 30000), verification: null };
