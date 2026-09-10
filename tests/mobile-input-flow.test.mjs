@@ -47,3 +47,38 @@ test('mobile playback executes cursor focus taps without visual verification', a
   assert.match(player, /cursor focus tap executed; visual verification skipped/);
   assert.match(player, /if \(isCursorFocusTap\)[\s\S]*?continue;[\s\S]*?const verified = expectedFrame/);
 });
+
+test('mobile swipe recording is ordered and playback clicks use post-scroll bounds', async () => {
+  const agent = await readFile(agentUrl, 'utf8');
+  assert.match(agent, /let recordingInteractionQueue = Promise\.resolve\(\)/);
+  assert.match(agent, /enqueueRecordingInteraction\(\(\) => handlePhysicalEmulatorSwipe/);
+  assert.match(agent, /enqueueRecordingInteraction\(\(\) => handlePhysicalEmulatorTap/);
+  assert.match(agent, /clickMethod = resolvedTarget \? 'current_resolved_target' : 'recorded_coordinate_fallback'/);
+  assert.match(agent, /tapX = resolvedTarget\?\.x/);
+  assert.match(agent, /if \(action === 'swipe' \|\| action === 'scroll'\)[\s\S]*?await refreshCachedXmlHierarchy\(actionDeviceId\)/);
+});
+
+test('live device recorder classifies pointer drags as one serialized swipe', async () => {
+  const inspector = await readFile(new URL('../components/MobileRecordingInspector.tsx', import.meta.url), 'utf8');
+  const capture = await readFile(new URL('../hooks/useMobileStepCapture.ts', import.meta.url), 'utf8');
+  const stepBuilder = await readFile(new URL('../utils/mobileRecordingSteps.ts', import.meta.url), 'utf8');
+  assert.match(inspector, /onPointerDown=\{handleLiveFramePointerDown\}/);
+  assert.match(inspector, /onPointerUp=\{handleLiveFramePointerUp\}/);
+  assert.match(inspector, /onRecordElement\(swipeElem, 'swipe'/);
+  assert.match(inspector, /executePresetSwipe/);
+  assert.match(inspector, /Execute and record Swipe/);
+  assert.doesNotMatch(inspector, /onPointerDown=\{handleLiveFrameClick\}/);
+  assert.match(capture, /commandQueueRef\.current = commandQueueRef\.current\.then/);
+  assert.match(capture, /await waitForMobileDeviceAction\(queued\.actionId\)/);
+  assert.match(stepBuilder, /normalizedX1: metrics\?\.normalizedX1/);
+  assert.match(stepBuilder, /driver\.performActions/);
+});
+
+test('agent executes swipes through Appium W3C actions with ADB fallback', async () => {
+  const agent = await readFile(agentUrl, 'utf8');
+  assert.match(agent, /async function performAppiumSwipe/);
+  assert.match(agent, /`\/session\/\$\{encodeURIComponent\(sessionId\)\}\/actions`/);
+  assert.match(agent, /origin: 'viewport'/);
+  assert.match(agent, /const appiumExecuted = await performAppiumSwipe/);
+  assert.match(agent, /appiumExecuted[\s\S]*?'\:'[\s\S]*?adb -s/);
+});

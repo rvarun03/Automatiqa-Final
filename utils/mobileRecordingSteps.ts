@@ -7,6 +7,15 @@ export interface MobileStepMetrics {
   screenHeight?: number;
   normalizedX?: number;
   normalizedY?: number;
+  x1?: number;
+  y1?: number;
+  x2?: number;
+  y2?: number;
+  duration?: number;
+  normalizedX1?: number;
+  normalizedY1?: number;
+  normalizedX2?: number;
+  normalizedY2?: number;
   recordOnly?: boolean;
 }
 
@@ -48,12 +57,13 @@ export function buildMobileRecordedStep(
   } else if (action === 'long_press') {
     appium = `// Long press ${targetName}\nconst el = await driver.elementByXPath(${JSON.stringify(xpath)});\nawait new TouchAction(driver).longPress({ element: el, duration: 1500 }).release().perform();`;
   } else if (action === 'swipe') {
-    appium = `await driver.touchPerform([{ action: 'press', options: { x: 100, y: 500 } }, { action: 'wait', options: { ms: 1000 } }, { action: 'moveTo', options: { x: 100, y: 100 } }, { action: 'release' }]);`;
+    appium = `await driver.performActions([{ type: 'pointer', id: 'finger1', parameters: { pointerType: 'touch' }, actions: [{ type: 'pointerMove', duration: 0, x: ${metrics?.x1 ?? 0}, y: ${metrics?.y1 ?? 0} }, { type: 'pointerDown', button: 0 }, { type: 'pause', duration: ${metrics?.duration ?? 300} }, { type: 'pointerMove', duration: ${metrics?.duration ?? 300}, x: ${metrics?.x2 ?? 0}, y: ${metrics?.y2 ?? 0} }, { type: 'pointerUp', button: 0 }] }]);`;
   } else if (action === 'press') {
     appium = `await driver.pressKeyCode(${value === 'Back' ? 4 : value === 'Home' ? 3 : 187});`;
   }
 
   return {
+    id: `mobile-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 9)}`,
     action,
     value,
     elementName: targetName,
@@ -106,6 +116,15 @@ export function buildMobileRecordedStep(
     screenHeight: metrics?.screenHeight,
     normalizedX: metrics?.normalizedX,
     normalizedY: metrics?.normalizedY,
+    x1: metrics?.x1,
+    y1: metrics?.y1,
+    x2: metrics?.x2,
+    y2: metrics?.y2,
+    duration: metrics?.duration,
+    normalizedX1: metrics?.normalizedX1,
+    normalizedY1: metrics?.normalizedY1,
+    normalizedX2: metrics?.normalizedX2,
+    normalizedY2: metrics?.normalizedY2,
     screenshot: screenshot || undefined,
     timestamp: Date.now()
   };

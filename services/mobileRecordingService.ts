@@ -17,6 +17,19 @@ export async function performMobileDeviceAction(email: string, action: string, p
   }));
 }
 
+export async function waitForMobileDeviceAction(actionId: string, timeoutMs = 30000) {
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < timeoutMs) {
+    const data = await readJson(await fetch(`/api/device-agent/action-result/${encodeURIComponent(actionId)}`));
+    if (data.completed) {
+      if (data.result?.success === false) throw new Error(data.result.error || 'Mobile device action failed');
+      return data.result;
+    }
+    await new Promise(resolve => setTimeout(resolve, 150));
+  }
+  throw new Error(`Mobile device action timed out after ${timeoutMs}ms`);
+}
+
 export async function clearPendingMobileDeviceActions(email: string) {
   return readJson(await fetch('/api/device-agent/clear-pending-actions', {
     method: 'POST',

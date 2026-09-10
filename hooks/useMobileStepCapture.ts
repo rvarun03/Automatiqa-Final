@@ -1,7 +1,7 @@
-import { Dispatch, MouseEvent, MutableRefObject, SetStateAction, useCallback } from 'react';
+import { Dispatch, MouseEvent, MutableRefObject, SetStateAction, useCallback, useRef } from 'react';
 import { toast } from 'sonner';
 import { RecordedStep } from '../types';
-import { getMobileLiveFrame, performMobileDeviceAction } from '../services/mobileRecordingService';
+import { getMobileLiveFrame, performMobileDeviceAction, waitForMobileDeviceAction } from '../services/mobileRecordingService';
 import { buildMobileRecordedStep, MobileStepMetrics } from '../utils/mobileRecordingSteps';
 
 interface MobileStepCaptureOptions {
@@ -25,6 +25,7 @@ interface MobileStepCaptureOptions {
 }
 
 export function useMobileStepCapture(options: MobileStepCaptureOptions) {
+  const commandQueueRef = useRef<Promise<void>>(Promise.resolve());
   return useCallback((
     elem: any,
     overrideAction?: string,
@@ -81,6 +82,7 @@ export function useMobileStepCapture(options: MobileStepCaptureOptions) {
           targetBox: step.targetBox
         } as RecordedStep];
       });
+      return;
     } else {
       options.addStep(step);
     }
@@ -90,15 +92,20 @@ export function useMobileStepCapture(options: MobileStepCaptureOptions) {
     options.log(`[${time}] [Appium] findElement(${step.locator.primary.type}, "${step.locator.primary.value}") -> ${action}`);
 
     const bounds = elem.bounds?.match(/^\[(\d+),(\d+)\]\[(\d+),(\d+)\]$/);
-    if (!metrics?.recordOnly && options.liveFrame && (metrics?.coordinates || bounds)) {
+    if (!metrics?.recordOnly && action !== 'assertion' && options.liveFrame && (metrics?.coordinates || bounds || action === 'swipe')) {
       // Preserve the physical touch point. Bounds are only a fallback for
       // inspector controls that did not originate from a real touch.
-      const x = metrics?.coordinates?.x ?? Math.round((Number(bounds![1]) + Number(bounds![3])) / 2);
-      const y = metrics?.coordinates?.y ?? Math.round((Number(bounds![2]) + Number(bounds![4])) / 2);
+      const x = metrics?.coordinates?.x ?? (bounds ? Math.round((Number(bounds[1]) + Number(bounds[3])) / 2) : metrics?.x1);
+      const y = metrics?.coordinates?.y ?? (bounds ? Math.round((Number(bounds[2]) + Number(bounds[4])) / 2) : metrics?.y1);
       const beforeFrame = options.liveFrame;
-      void performMobileDeviceAction(options.email, 'tap', {
-        x, y, resourceId: elem.resourceId, xpath: elem.xpath, bounds: elem.bounds, recordStep: false
-      }).then(async () => {
+      const deviceAction = action === 'swipe' ? 'swipe' : action === 'long_press' ? 'long_press' : action === 'fill' ? 'fill' : 'tap';
+      const actionParams = action === 'swipe'
+        ? { ...metrics, recordStep: false }
+        : { x, y, text: action === 'fill' ? value : undefined, resourceId: elem.resourceId, xpath: elem.xpath, bounds: elem.bounds, target: step.target, recordStep: false };
+      commandQueueRef.current = commandQueueRef.current.then(async () => {
+        const queued = await performMobileDeviceAction(options.email, deviceAction, actionParams);
+        if (!queued?.actionId) throw new Error(`Device did not accept ${deviceAction}`);
+        await waitForMobileDeviceAction(queued.actionId);
         if (!options.captureScreenshots) return;
         // Store post-action evidence. The previous implementation attached the
         // frame from before the tap, which made playback comparisons misleading.
@@ -117,7 +124,7 @@ export function useMobileStepCapture(options: MobileStepCaptureOptions) {
             ? { ...item, screenshot: capturedFrame }
             : item));
         }
-      }).catch(error => console.error('Failed to post device action:', error));
+      }).catch(error => console.error('Failed to execute recorded device action:', error));
     }
     toast.success(`[+] Recorded Step: ${action.toUpperCase()} "${step.elementName}"`);
   }, [options]);

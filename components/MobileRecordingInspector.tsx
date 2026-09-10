@@ -258,6 +258,8 @@ export const MobileRecordingInspector: React.FC<MobileRecordingInspectorProps> =
 
   // Reference to the phone screen viewport container for exact relative coordinate computation
   const phoneScreenRef = useRef<HTMLDivElement>(null);
+  const liveFrameImageRef = useRef<HTMLImageElement>(null);
+  const liveGestureRef = useRef<{ pointerId: number; clientX: number; clientY: number; startedAt: number } | null>(null);
 
   // Fullscreen toggle state for the emulator
   const [isFullscreen, setIsFullscreen] = useState<boolean>(false);
@@ -4257,7 +4259,45 @@ export const MobileRecordingInspector: React.FC<MobileRecordingInspectorProps> =
     onRecordElement(enrichedElem, action, value, e, extraMetrics);
   };
 
-  const handleLiveFrameClick = async (e: React.PointerEvent<HTMLImageElement>) => {
+  const handleLiveFramePointerDown = (e: React.PointerEvent<HTMLImageElement>) => {
+    liveGestureRef.current = { pointerId: e.pointerId, clientX: e.clientX, clientY: e.clientY, startedAt: Date.now() };
+    e.currentTarget.setPointerCapture?.(e.pointerId);
+  };
+
+  const executePresetSwipe = (direction: 'up' | 'down' | 'left' | 'right', e: React.MouseEvent) => {
+    const image = liveFrameImageRef.current;
+    if (!image || !liveMobileFrame) return;
+    const width = image.naturalWidth || 1080;
+    const height = image.naturalHeight || 2400;
+    const centerX = Math.round(width * 0.5);
+    const centerY = Math.round(height * 0.5);
+    const points = direction === 'up'
+      ? [centerX, Math.round(height * 0.78), centerX, Math.round(height * 0.28)]
+      : direction === 'down'
+        ? [centerX, Math.round(height * 0.28), centerX, Math.round(height * 0.78)]
+        : direction === 'left'
+          ? [Math.round(width * 0.82), centerY, Math.round(width * 0.18), centerY]
+          : [Math.round(width * 0.18), centerY, Math.round(width * 0.82), centerY];
+    const [x1, y1, x2, y2] = points;
+    const swipeElem: MobileElementInfo = {
+      id: `preset-swipe-${direction}-${Date.now()}`,
+      name: `Swipe ${direction}`,
+      type: 'android.view.View', resourceId: '', xpath: '',
+      bounds: `[${x1},${y1}][${x2},${y2}]`, screen: activeTab || 'MAIN',
+      clickable: false, enabled: true
+    };
+    onRecordElement(swipeElem, 'swipe', `Swipe ${direction}`, e, {
+      coordinates: { x: x1, y: y1 }, screenWidth: width, screenHeight: height,
+      x1, y1, x2, y2, duration: 350,
+      normalizedX1: x1 / width, normalizedY1: y1 / height,
+      normalizedX2: x2 / width, normalizedY2: y2 / height
+    });
+  };
+
+  const handleLiveFramePointerUp = async (e: React.PointerEvent<HTMLImageElement>) => {
+    const gestureStart = liveGestureRef.current;
+    liveGestureRef.current = null;
+    if (!gestureStart || gestureStart.pointerId !== e.pointerId) return;
     const image = e.currentTarget;
     const rect = image.getBoundingClientRect();
     const naturalWidth = image.naturalWidth || 1080;
@@ -4275,7 +4315,35 @@ export const MobileRecordingInspector: React.FC<MobileRecordingInspectorProps> =
 
     const deviceX = Math.round(localX / imageScale);
     const deviceY = Math.round(localY / imageScale);
+    const startLocalX = gestureStart.clientX - rect.left - offsetX;
+    const startLocalY = gestureStart.clientY - rect.top - offsetY;
+    if (startLocalX < 0 || startLocalY < 0 || startLocalX > renderedWidth || startLocalY > renderedHeight) return;
+    const startDeviceX = Math.round(startLocalX / imageScale);
+    const startDeviceY = Math.round(startLocalY / imageScale);
+    const duration = Math.max(100, Math.min(2500, Date.now() - gestureStart.startedAt));
+    const travel = Math.hypot(deviceX - startDeviceX, deviceY - startDeviceY);
     triggerTouchRipple(e.clientX - rect.left, e.clientY - rect.top);
+
+    if (travel >= Math.max(24, Math.min(naturalWidth, naturalHeight) * 0.015)) {
+      const swipeElem: MobileElementInfo = {
+        id: `swipe-${Date.now()}`,
+        name: 'Swipe gesture',
+        type: 'android.view.View',
+        resourceId: '', xpath: '',
+        bounds: `[${startDeviceX},${startDeviceY}][${deviceX},${deviceY}]`,
+        screen: activeTab || 'MAIN', clickable: false, enabled: true
+      };
+      onRecordElement(swipeElem, 'swipe', 'Swipe gesture', e, {
+        coordinates: { x: startDeviceX, y: startDeviceY },
+        screenWidth: naturalWidth, screenHeight: naturalHeight,
+        x1: startDeviceX, y1: startDeviceY, x2: deviceX, y2: deviceY, duration,
+        normalizedX1: startDeviceX / naturalWidth,
+        normalizedY1: startDeviceY / naturalHeight,
+        normalizedX2: deviceX / naturalWidth,
+        normalizedY2: deviceY / naturalHeight
+      });
+      return;
+    }
 
     // Record and dispatch the tap synchronously. The live screenshot refreshes
     // several times a second, so waiting for a hierarchy request before calling
@@ -4310,6 +4378,12 @@ export const MobileRecordingInspector: React.FC<MobileRecordingInspectorProps> =
       normalizedX: deviceX / naturalWidth,
       normalizedY: deviceY / naturalHeight
     };
+
+    const dispatchedImmediately = action !== 'fill' && action !== 'assertion';
+    if (dispatchedImmediately) {
+      setSelectedElement(coordinateElem);
+      onRecordElement(coordinateElem, action, inspectorMode === 'type' ? inspectorInputText : undefined, e, coordinateMetrics);
+    }
 
     // Resolve the pre-action Android node before sending the device command.
     // A screenshot coordinate can be offset by letterboxing/system insets and
@@ -4384,8 +4458,7 @@ export const MobileRecordingInspector: React.FC<MobileRecordingInspectorProps> =
         touch: { x: deviceX, y: deviceY }, target: inspectedElem.name,
         bounds: match.bounds, dispatch: { x: deviceX, y: deviceY }, rank: match.rank
       });
-      // Dispatch exactly once at the point the user pressed. The hierarchy
-      // identifies the element, but must not move the user's tap to a center.
+      // Upgrade the already-recorded coordinate step; do not dispatch again.
       onRecordElement(inspectedElem, action, inspectorMode === 'type' ? inspectorInputText : undefined, e, {
         targetBox: {
           x: Number(((match.x1 / naturalWidth) * 100).toFixed(1)),
@@ -4397,14 +4470,15 @@ export const MobileRecordingInspector: React.FC<MobileRecordingInspectorProps> =
         screenWidth: naturalWidth,
         screenHeight: naturalHeight,
         normalizedX: deviceX / naturalWidth,
-        normalizedY: deviceY / naturalHeight
+        normalizedY: deviceY / naturalHeight,
+        recordOnly: dispatchedImmediately
       });
     } catch (error: any) {
       console.warn('Recording live tap with coordinate fallback:', error?.message || error);
-      // No real hierarchy means we cannot safely invent an element name. The
-      // coordinate fallback still lets the user interact with the device.
-      setSelectedElement(coordinateElem);
-      onRecordElement(coordinateElem, action, inspectorMode === 'type' ? inspectorInputText : undefined, e, coordinateMetrics);
+      if (!dispatchedImmediately) {
+        setSelectedElement(coordinateElem);
+        onRecordElement(coordinateElem, action, inspectorMode === 'type' ? inspectorInputText : undefined, e, coordinateMetrics);
+      }
     }
   };
 
@@ -4642,12 +4716,32 @@ export const MobileRecordingInspector: React.FC<MobileRecordingInspectorProps> =
               {/* A real device session must render the ADB screencast, never the simulated app. */}
               {liveMobileFrame && (
                 <img
+                  ref={liveFrameImageRef}
                   src={liveMobileFrame}
                   alt={`Live Android device ${mobileDevice}`}
-                  onPointerDown={handleLiveFrameClick}
+                  onPointerDown={handleLiveFramePointerDown}
+                  onPointerUp={handleLiveFramePointerUp}
+                  onPointerCancel={() => { liveGestureRef.current = null; }}
                   className={`absolute inset-0 z-[100] h-full w-full bg-black object-contain ${isInspectorActive ? 'cursor-crosshair' : 'cursor-default'}`}
                   draggable={false}
+                  style={{ touchAction: 'none' }}
                 />
+              )}
+              {liveMobileFrame && isRecording && (
+                <div className="absolute bottom-3 left-1/2 z-[120] -translate-x-1/2 grid grid-cols-4 gap-1 rounded-xl border border-white/20 bg-slate-950/90 p-1.5 shadow-2xl backdrop-blur">
+                  {(['up', 'down', 'left', 'right'] as const).map(direction => (
+                    <button
+                      key={direction}
+                      type="button"
+                      onPointerDown={event => event.stopPropagation()}
+                      onClick={event => executePresetSwipe(direction, event)}
+                      className="rounded-lg bg-indigo-600 px-2 py-1.5 text-[8px] font-black uppercase text-white hover:bg-indigo-500 active:scale-95"
+                      title={`Execute and record Swipe ${direction}`}
+                    >
+                      {direction}
+                    </button>
+                  ))}
+                </div>
               )}
               {!liveMobileFrame && isRecording && (
                 <div className="absolute inset-0 z-[90] bg-slate-950 flex flex-col items-center justify-center gap-3 px-8 text-center">

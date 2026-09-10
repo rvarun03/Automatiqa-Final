@@ -24,12 +24,14 @@ process.argv.slice(2).forEach(val => {
 const userEmail = (args.email || 'sowbarnya@qaoncloud.com').toLowerCase();
 const serverUrl = (args.server || 'http://localhost:3000').replace(/\/$/, '');
 const port = parseInt(args.port) || 4723;
+const appiumServerUrl = new URL(args.appium || process.env.AUTOMATIQA_APPIUM_URL || `http://127.0.0.1:${port}`);
 
 console.log('====================================================');
 console.log('       AUTOMATIQA DEVICE AGENT (REAL-TIME ADB STREAM)');
 console.log('====================================================');
 console.log(`User Email : ${userEmail}`);
 console.log(`Server URL : ${serverUrl}`);
+console.log(`Appium URL: ${appiumServerUrl.href.replace(/\/$/, '')}`);
 console.log(`ADB Status : Checking...`);
 
 function runCmd(command) {
@@ -42,6 +44,86 @@ function runCmd(command) {
       }
     });
   });
+}
+
+let appiumSession = { deviceId: '', sessionId: '' };
+
+function appiumRequest(method, requestPath, body) {
+  return new Promise((resolve, reject) => {
+    const payload = body === undefined ? '' : JSON.stringify(body);
+    const client = appiumServerUrl.protocol === 'https:' ? https : http;
+    const basePath = appiumServerUrl.pathname.replace(/\/$/, '');
+    const req = client.request({
+      hostname: appiumServerUrl.hostname,
+      port: appiumServerUrl.port || (appiumServerUrl.protocol === 'https:' ? 443 : 80),
+      path: `${basePath}${requestPath}` || '/', method,
+      headers: payload ? { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) } : {}
+    }, res => {
+      let responseBody = '';
+      res.on('data', chunk => responseBody += chunk);
+      res.on('end', () => {
+        let parsed = {};
+        try { parsed = JSON.parse(responseBody || '{}'); } catch (_) {}
+        if ((res.statusCode || 500) >= 400 || parsed.value?.error) {
+          reject(new Error(parsed.value?.message || `Appium request failed (${res.statusCode})`));
+          return;
+        }
+        resolve(parsed);
+      });
+    });
+    req.setTimeout(10000, () => req.destroy(new Error('Appium request timed out')));
+    req.on('error', reject);
+    if (payload) req.write(payload);
+    req.end();
+  });
+}
+
+async function getAppiumSession(deviceId) {
+  if (appiumSession.deviceId === deviceId && appiumSession.sessionId) return appiumSession.sessionId;
+  const response = await appiumRequest('POST', '/session', {
+    capabilities: {
+      alwaysMatch: {
+        platformName: 'Android',
+        'appium:automationName': 'UiAutomator2',
+        'appium:deviceName': deviceId,
+        'appium:udid': deviceId,
+        'appium:noReset': true,
+        'appium:autoLaunch': false,
+        'appium:newCommandTimeout': 3600
+      },
+      firstMatch: [{}]
+    }
+  });
+  const sessionId = response.value?.sessionId || response.sessionId;
+  if (!sessionId) throw new Error('Appium did not create a UiAutomator2 session');
+  appiumSession = { deviceId, sessionId };
+  console.log(`[Appium] UiAutomator2 session ${sessionId} attached to ${deviceId}`);
+  return sessionId;
+}
+
+async function performAppiumSwipe(deviceId, x1, y1, x2, y2, duration) {
+  try {
+    const sessionId = await getAppiumSession(deviceId);
+    const gestureDuration = Math.max(100, Math.min(2500, duration || 300));
+    await appiumRequest('POST', `/session/${encodeURIComponent(sessionId)}/actions`, {
+      actions: [{
+        type: 'pointer', id: 'finger1', parameters: { pointerType: 'touch' },
+        actions: [
+          { type: 'pointerMove', duration: 0, origin: 'viewport', x: x1, y: y1 },
+          { type: 'pointerDown', button: 0 },
+          { type: 'pause', duration: Math.min(150, gestureDuration) },
+          { type: 'pointerMove', duration: gestureDuration, origin: 'viewport', x: x2, y: y2 },
+          { type: 'pointerUp', button: 0 }
+        ]
+      }]
+    });
+    console.log(`[Appium][Swipe] (${x1},${y1}) -> (${x2},${y2}) on ${deviceId}`);
+    return true;
+  } catch (error) {
+    console.warn(`[Appium][Swipe] ${error.message}; falling back to ADB.`);
+    appiumSession = { deviceId: '', sessionId: '' };
+    return false;
+  }
 }
 
 async function checkAdb() {
@@ -665,6 +747,16 @@ let suppressInjectedTouchUntil = 0;
 let browserDrivenCommandUntil = 0;
 let activePlaybackInputTarget = null;
 const injectedTouchMarkers = [];
+// getevent callbacks are synchronous, while hierarchy dumps and screenshots
+// are asynchronous. Preserve the user's physical interaction order so a tap
+// made after a swipe can never reach the server before that swipe.
+let recordingInteractionQueue = Promise.resolve();
+
+function enqueueRecordingInteraction(work) {
+  recordingInteractionQueue = recordingInteractionQueue
+    .then(work)
+    .catch(err => console.error('[Recorder] Interaction failed:', err.message));
+}
 
 function markInjectedTouch(x, y, kind = 'tap') {
   if (!Number.isFinite(Number(x)) || !Number.isFinite(Number(y))) return;
@@ -1029,9 +1121,9 @@ async function startAdbTouchListener(deviceId) {
                 gestureStartRawY = null;
 
                 if (Math.hypot(screenX - startX, screenY - startY) >= 30) {
-                  handlePhysicalEmulatorSwipe(deviceId, startX, startY, screenX, screenY, Math.max(100, Date.now() - gestureStartedAt), capturedElement, capturedScreenshot);
+                  enqueueRecordingInteraction(() => handlePhysicalEmulatorSwipe(deviceId, startX, startY, screenX, screenY, Math.max(100, Date.now() - gestureStartedAt), capturedElement, capturedScreenshot));
                 } else {
-                  handlePhysicalEmulatorTap(deviceId, screenX, screenY, capturedElement, capturedScreenshot);
+                  enqueueRecordingInteraction(() => handlePhysicalEmulatorTap(deviceId, screenX, screenY, capturedElement, capturedScreenshot));
                 }
               }
             }
@@ -1246,10 +1338,22 @@ async function handlePhysicalEmulatorSwipe(deviceId, x1, y1, x2, y2, duration, e
       skipForegroundMismatch(`physical swipe at (${x1},${y1}) -> (${x2},${y2})`);
       return;
     }
-    const [locatorAttr, postActionScreenshot] = await Promise.all([
-      Promise.resolve(elementPromise).catch(() => null),
-      captureScreenshot(deviceId).catch(() => null)
-    ]);
+    // Human vertical/horizontal swipes are rarely pixel-perfect. Lock the
+    // minor axis so playback cannot drift diagonally into another carousel,
+    // tab, or touch target.
+    if (Math.abs(y2 - y1) >= Math.abs(x2 - x1)) {
+      const lockedX = Math.round((x1 + x2) / 2);
+      x1 = lockedX; x2 = lockedX;
+    } else {
+      const lockedY = Math.round((y1 + y2) / 2);
+      y1 = lockedY; y2 = lockedY;
+    }
+    const locatorAttr = await Promise.resolve(elementPromise).catch(() => null);
+    // ADB reports touch-up before WebView/native fling scrolling has settled.
+    // Capture the stable destination, not a transient frame midway through it.
+    await new Promise(resolve => setTimeout(resolve, 700));
+    await refreshCachedXmlHierarchy(deviceId).catch(() => '');
+    const postActionScreenshot = await captureScreenshot(deviceId).catch(() => null);
     const screenWidth = touchDeviceBounds.displayWidth;
     const screenHeight = touchDeviceBounds.displayHeight;
     const stepPayload = {
@@ -1462,11 +1566,13 @@ async function startStreamingAndCommandPolling() {
             const currentScreen = await getDeviceBounds(actionDeviceId);
             const playbackXml = await refreshCachedXmlHierarchy(actionDeviceId).catch(() => '');
             const resolvedTarget = resolveRecordedTarget(playbackXml, params);
-            // The node verifies/labels the target, but the actual action must
-            // happen at the exact recorded touch point—not its center.
+            // Prefer the live bounds of the recorded semantic target. This is
+            // essential after scrolling because its screen coordinates move.
+            // Recorded coordinates are only a fallback for coordinate-only
+            // elements which cannot be found in the current hierarchy.
             let tapX;
             let tapY;
-            let clickMethod = 'exact_recorded_coordinate';
+            let clickMethod = resolvedTarget ? 'current_resolved_target' : 'recorded_coordinate_fallback';
             const targetInfo = params.target || params.node || {};
 
             console.log('[Playback click] Recorded target:', {
@@ -1490,10 +1596,14 @@ async function startStreamingAndCommandPolling() {
               console.log('[Playback click] Element lookup failed; using coordinate fallback.');
             }
 
+            tapX = resolvedTarget?.x;
+            tapY = resolvedTarget?.y;
             const normalizedX = Number(params.normalizedX);
             const normalizedY = Number(params.normalizedY);
-            tapX = Number.isFinite(normalizedX) ? Math.round(normalizedX * currentScreen.displayWidth) : undefined;
-            tapY = Number.isFinite(normalizedY) ? Math.round(normalizedY * currentScreen.displayHeight) : undefined;
+            if (!Number.isFinite(tapX) || !Number.isFinite(tapY)) {
+              tapX = Number.isFinite(normalizedX) ? Math.round(normalizedX * currentScreen.displayWidth) : undefined;
+              tapY = Number.isFinite(normalizedY) ? Math.round(normalizedY * currentScreen.displayHeight) : undefined;
+            }
             if (!Number.isFinite(tapX) || !Number.isFinite(tapY)) {
               const recordedWidth = Number(params.screenWidth);
               const recordedHeight = Number(params.screenHeight);
@@ -1507,14 +1617,12 @@ async function startStreamingAndCommandPolling() {
             if (!Number.isFinite(Number(tapX)) || !Number.isFinite(Number(tapY))) {
               throw new Error(`[Playback][Tap] No valid recorded or resolved coordinates for ${params.locator?.primary?.value || 'target'}`);
             }
-            if (clickMethod === 'exact_recorded_coordinate') {
-              console.log('[Playback click] Resolved target:', {
-                locator_used: resolvedTarget?.locatorUsed || 'recorded_coordinate',
-                current_bounds: resolvedTarget?.bounds || '',
-                current_center: { x: tapX, y: tapY },
-                click_method: clickMethod
-              });
-            }
+            console.log('[Playback click] Tap decision:', {
+              locator_used: resolvedTarget?.locatorUsed || 'recorded_coordinate',
+              current_bounds: resolvedTarget?.bounds || '',
+              point: { x: tapX, y: tapY },
+              click_method: clickMethod
+            });
             params.x = tapX; params.y = tapY;
             cmd = `adb -s ${actionDeviceId} shell input tap ${tapX} ${tapY}`;
             if (action === 'double_tap') {
@@ -1601,15 +1709,25 @@ async function startStreamingAndCommandPolling() {
             const normalizedY2 = asNumber(gesture.normalizedY2 ?? gesture.normalizedEndY);
             const recordedWidth = asNumber(gesture.screenWidth);
             const recordedHeight = asNumber(gesture.screenHeight);
-            const x1 = Number.isFinite(normalizedX1) ? Math.round(normalizedX1 * currentScreen.displayWidth) : (Number.isFinite(recordedWidth) ? Math.round(recordedX1 * currentScreen.displayWidth / recordedWidth) : recordedX1);
-            const y1 = Number.isFinite(normalizedY1) ? Math.round(normalizedY1 * currentScreen.displayHeight) : (Number.isFinite(recordedHeight) ? Math.round(recordedY1 * currentScreen.displayHeight / recordedHeight) : recordedY1);
-            const x2 = Number.isFinite(normalizedX2) ? Math.round(normalizedX2 * currentScreen.displayWidth) : (Number.isFinite(recordedWidth) ? Math.round(recordedX2 * currentScreen.displayWidth / recordedWidth) : recordedX2);
-            const y2 = Number.isFinite(normalizedY2) ? Math.round(normalizedY2 * currentScreen.displayHeight) : (Number.isFinite(recordedHeight) ? Math.round(recordedY2 * currentScreen.displayHeight / recordedHeight) : recordedY2);
+            let x1 = Number.isFinite(normalizedX1) ? Math.round(normalizedX1 * currentScreen.displayWidth) : (Number.isFinite(recordedWidth) ? Math.round(recordedX1 * currentScreen.displayWidth / recordedWidth) : recordedX1);
+            let y1 = Number.isFinite(normalizedY1) ? Math.round(normalizedY1 * currentScreen.displayHeight) : (Number.isFinite(recordedHeight) ? Math.round(recordedY1 * currentScreen.displayHeight / recordedHeight) : recordedY1);
+            let x2 = Number.isFinite(normalizedX2) ? Math.round(normalizedX2 * currentScreen.displayWidth) : (Number.isFinite(recordedWidth) ? Math.round(recordedX2 * currentScreen.displayWidth / recordedWidth) : recordedX2);
+            let y2 = Number.isFinite(normalizedY2) ? Math.round(normalizedY2 * currentScreen.displayHeight) : (Number.isFinite(recordedHeight) ? Math.round(recordedY2 * currentScreen.displayHeight / recordedHeight) : recordedY2);
             if (![x1, y1, x2, y2].every(Number.isFinite)) {
               throw new Error(`[Playback][Swipe] Missing recorded coordinates: ${JSON.stringify(gesture)}`);
             }
+            if (Math.abs(y2 - y1) >= Math.abs(x2 - x1)) {
+              const lockedX = Math.round((x1 + x2) / 2);
+              x1 = lockedX; x2 = lockedX;
+            } else {
+              const lockedY = Math.round((y1 + y2) / 2);
+              y1 = lockedY; y2 = lockedY;
+            }
             console.log(`[Playback][Swipe] (${recordedX1},${recordedY1}) -> (${recordedX2},${recordedY2}) resolved for ${currentScreen.displayWidth}x${currentScreen.displayHeight} as (${x1},${y1}) -> (${x2},${y2})`);
-            cmd = `adb -s ${actionDeviceId} shell input swipe ${x1} ${y1} ${x2} ${y2} ${gesture.duration || 300}`;
+            const appiumExecuted = await performAppiumSwipe(actionDeviceId, x1, y1, x2, y2, gesture.duration || 300);
+            cmd = appiumExecuted
+              ? ':'
+              : `adb -s ${actionDeviceId} shell input swipe ${x1} ${y1} ${x2} ${y2} ${gesture.duration || 300}`;
             // Anchor the gesture to the element it started on
             const preXml = await getHierarchyBeforeGesture(actionDeviceId);
             locatorAttr = await getElementAtCoordinates(actionDeviceId, x1, y1, preXml).catch(() => null);
@@ -1686,6 +1804,13 @@ async function startStreamingAndCommandPolling() {
               }
             }
             const commandResult = await runCmd(cmd);
+
+            if (action === 'swipe' || action === 'scroll') {
+              // Let momentum/animated scrolling finish before resolving the
+              // next click or comparing against the recorded destination.
+              await new Promise(resolve => setTimeout(resolve, 700));
+              await refreshCachedXmlHierarchy(actionDeviceId).catch(() => '');
+            }
 
             // Resolve the node after the ADB command has already been sent. The
             // promise started before the tap, so it describes the tapped screen.
