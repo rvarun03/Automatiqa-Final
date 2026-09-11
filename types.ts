@@ -497,6 +497,10 @@ export interface RecordedStep {
   masked?: boolean;
   placeholder?: string;
   originalValue?: string;
+  /** Edited input values supersede the pixels captured during recording. */
+  visualVerificationDisabled?: boolean;
+  /** Clear the existing field before entering an edited playback value. */
+  replaceText?: boolean;
   x?: number;
   y?: number;
   coordinates?: { x: number; y: number };

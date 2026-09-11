@@ -25,6 +25,8 @@ test('input recovery only refocuses a matching original target', async () => {
   assert.match(source, /!sameEditableTarget\(resolvedInput, retryTarget\)/);
   assert.match(source, /Refocusing original editable target/);
   assert.match(source, /const deleteExisting = params\.replaceText/);
+  assert.doesNotMatch(source, /text: target\.text \|\| params\.text/);
+  assert.match(source, /const coordinateInput = Number\.isFinite\(Number\(params\.x\)\)/);
 });
 
 test('legacy character clicks use the active focused input instead of stale metadata', async () => {
@@ -72,6 +74,30 @@ test('live device recorder classifies pointer drags as one serialized swipe', as
   assert.match(capture, /await waitForMobileDeviceAction\(queued\.actionId\)/);
   assert.match(stepBuilder, /normalizedX1: metrics\?\.normalizedX1/);
   assert.match(stepBuilder, /driver\.performActions/);
+});
+
+test('live device recorder locks repeated input while a step is executing', async () => {
+  const inspector = await readFile(new URL('../components/MobileRecordingInspector.tsx', import.meta.url), 'utf8');
+  const capture = await readFile(new URL('../hooks/useMobileStepCapture.ts', import.meta.url), 'utf8');
+  assert.match(inspector, /isStepExecuting/);
+  assert.match(inspector, /Executing step\.\.\./);
+  assert.match(capture, /if \(isExecutingRef\.current && !metrics\?\.recordOnly\) return/);
+  assert.match(capture, /options\.setExecuting\(true\)/);
+  assert.match(capture, /options\.setExecuting\(false\)/);
+});
+
+test('recorded input steps expose their value editor on touch layouts', async () => {
+  const player = await readFile(new URL('../components/RecordAndPlay.tsx', import.meta.url), 'utf8');
+  assert.match(player, /Edit input value/);
+  assert.match(player, /Change this step to type text/);
+  assert.match(player, /Changes are saved immediately and used during playback/);
+  assert.match(player, /action: 'fill', value, originalValue: value/);
+  assert.match(player, /replaceText: true, visualVerificationDisabled: true/);
+  assert.match(player, /const expectedFrame = step\.visualVerificationDisabled/);
+  assert.match(player, /executed using edited step data \(old screenshot ignored\)/);
+  assert.match(player, /This click will be changed to a Fill \/ Type step/);
+  assert.match(player, /opacity-100 transition-opacity md:opacity-0 md:group-hover:opacity-100/);
+  assert.match(player, /value: newStepData\.value/);
 });
 
 test('agent executes swipes through Appium W3C actions with ADB fallback', async () => {

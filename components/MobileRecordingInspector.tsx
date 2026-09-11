@@ -123,6 +123,7 @@ interface MobileRecordingInspectorProps {
   mobileAppActivity?: string;
   mobileUserEmail?: string;
   liveMobileFrame?: string | null;
+  isStepExecuting?: boolean;
   availableApps?: any[];
   onSwitchApp?: (appPackage: string) => void;
   onRecordElement: (
@@ -236,6 +237,7 @@ export const MobileRecordingInspector: React.FC<MobileRecordingInspectorProps> =
   mobileAppActivity,
   mobileUserEmail,
   liveMobileFrame,
+  isStepExecuting = false,
   availableApps = [],
   onSwitchApp,
   onRecordElement,
@@ -4206,6 +4208,7 @@ export const MobileRecordingInspector: React.FC<MobileRecordingInspectorProps> =
   };
 
   const handleElementClick = (elem: MobileElementInfo, e: React.MouseEvent) => {
+    if (isStepExecuting) return;
     let extraMetrics: { targetBox: { x: number; y: number; width: number; height: number }; coordinates: { x: number; y: number } } | undefined;
 
     const enrichedElem = {
@@ -4260,11 +4263,13 @@ export const MobileRecordingInspector: React.FC<MobileRecordingInspectorProps> =
   };
 
   const handleLiveFramePointerDown = (e: React.PointerEvent<HTMLImageElement>) => {
+    if (isStepExecuting) return;
     liveGestureRef.current = { pointerId: e.pointerId, clientX: e.clientX, clientY: e.clientY, startedAt: Date.now() };
     e.currentTarget.setPointerCapture?.(e.pointerId);
   };
 
   const executePresetSwipe = (direction: 'up' | 'down' | 'left' | 'right', e: React.MouseEvent) => {
+    if (isStepExecuting) return;
     const image = liveFrameImageRef.current;
     if (!image || !liveMobileFrame) return;
     const width = image.naturalWidth || 1080;
@@ -4295,6 +4300,7 @@ export const MobileRecordingInspector: React.FC<MobileRecordingInspectorProps> =
   };
 
   const handleLiveFramePointerUp = async (e: React.PointerEvent<HTMLImageElement>) => {
+    if (isStepExecuting) return;
     const gestureStart = liveGestureRef.current;
     liveGestureRef.current = null;
     if (!gestureStart || gestureStart.pointerId !== e.pointerId) return;
@@ -4741,6 +4747,22 @@ export const MobileRecordingInspector: React.FC<MobileRecordingInspectorProps> =
                       {direction}
                     </button>
                   ))}
+                </div>
+              )}
+              {liveMobileFrame && isStepExecuting && (
+                <div
+                  className="absolute inset-0 z-[150] flex cursor-wait flex-col items-center justify-center gap-3 bg-slate-950/55 text-center backdrop-blur-[2px]"
+                  role="status"
+                  aria-live="polite"
+                  aria-label="Step is executing on the mobile device"
+                >
+                  <div className="flex h-14 w-14 items-center justify-center rounded-2xl border border-indigo-400/40 bg-slate-950/90 shadow-2xl">
+                    <RotateCw size={24} className="animate-spin text-indigo-400" />
+                  </div>
+                  <div className="rounded-xl border border-white/10 bg-slate-950/90 px-4 py-2 shadow-xl">
+                    <p className="text-[11px] font-black uppercase tracking-widest text-white">Executing step...</p>
+                    <p className="mt-1 text-[9px] font-medium text-slate-400">Please wait for the device to update</p>
+                  </div>
                 </div>
               )}
               {!liveMobileFrame && isRecording && (

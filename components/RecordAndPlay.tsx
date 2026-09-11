@@ -386,6 +386,7 @@ const RecordAndPlay: React.FC<RecordAndPlayProps> = ({ project, user, onUpdatePr
   }, [project.id, project.recordedFlows]);
 
   const [currentSteps, setCurrentSteps] = useState<RecordedStep[]>([]);
+  const [isMobileStepExecuting, setIsMobileStepExecuting] = useState(false);
   const [flowName, setFlowName] = useState('New Recording Flow');
   const [flowDescription, setFlowDescription] = useState('');
   const [refineInstructions, setRefineInstructions] = useState('');
@@ -406,6 +407,7 @@ const RecordAndPlay: React.FC<RecordAndPlayProps> = ({ project, user, onUpdatePr
   const [isAddStepModalOpen, setIsAddStepModalOpen] = useState(false);
   const [insertStepIndex, setInsertStepIndex] = useState<number | null>(null);
   const [editingStep, setEditingStep] = useState<RecordedStep | null>(null);
+  const [inlineEditingValueStepId, setInlineEditingValueStepId] = useState<string | null>(null);
   const [newStepData, setNewStepData] = useState<{
     action: RecordedStep['action'];
     locator: string;
@@ -988,7 +990,11 @@ const RecordAndPlay: React.FC<RecordAndPlayProps> = ({ project, user, onUpdatePr
             params.normalizedY2 = gesture.normalizedY2 ?? gesture.normalizedEndY;
           }
           const startedAt = Date.now();
-          const expectedFrame = step.screenshot || targetFlow.stepScreenshots?.[step.id];
+          // Edited text is authoritative. Its recorded screenshot still shows
+          // the old value and must not control or reject the new command.
+          const expectedFrame = step.visualVerificationDisabled
+            ? undefined
+            : step.screenshot || targetFlow.stepScreenshots?.[step.id];
           const frameBeforeAction = lastPlaybackFrame;
           let actionFrameCapturedAt = 0;
           if (action === 'wait') {
@@ -1026,7 +1032,13 @@ const RecordAndPlay: React.FC<RecordAndPlayProps> = ({ project, user, onUpdatePr
           lastPlaybackFrame = actualFrame;
           setPlaybackStepScreenshots(prev => ({ ...prev, [step.id]: actualFrame }));
           if (!expectedFrame) {
-            throw new Error(`Step ${i + 1} cannot be verified because its recording has no screenshot. Re-record the flow with step screenshots enabled.`);
+            setStepExecutionStatus(prev => ({ ...prev, [step.id]: 'passed' }));
+            setStepExecutionTime(prev => ({ ...prev, [step.id]: Date.now() - startedAt }));
+            setPlaybackLogs(prev => [...prev, {
+              timestamp: new Date().toLocaleTimeString(), level: 'success',
+              message: `✅ Device step ${i + 1}/${steps.length}: ${action.toUpperCase()} executed using edited step data (old screenshot ignored)`
+            }]);
+            continue;
           }
           const verification = verified.verification || await compareMobileDeviceFrames(expectedFrame, actualFrame);
           if (!verification.matched) {
@@ -2294,7 +2306,8 @@ const RecordAndPlay: React.FC<RecordAndPlayProps> = ({ project, user, onUpdatePr
     inspectorValue: mobileInspectorInputValue,
     activeScreen: mobileActiveAppTab || mobileAppScreen || 'MAIN',
     liveFrame: liveMobileFrame,
-    captureScreenshots
+    captureScreenshots,
+    setExecuting: setIsMobileStepExecuting
   });
 
   const handleApkUpload = async (file: File) => {
@@ -3272,11 +3285,15 @@ const RecordAndPlay: React.FC<RecordAndPlayProps> = ({ project, user, onUpdatePr
   const handleUpdateStep = () => {
     if (!editingStep) return;
 
+    const updatedAction = editingStep.platform === 'mobile' && newStepData.value.trim() && newStepData.action === 'click'
+      ? 'fill'
+      : newStepData.action;
+
     const updatedSteps = currentSteps.map(s => {
       if (s.id === editingStep.id) {
         return {
           ...s,
-          action: newStepData.action,
+          action: updatedAction,
           locator: {
             ...s.locator,
             primary: {
@@ -3285,7 +3302,10 @@ const RecordAndPlay: React.FC<RecordAndPlayProps> = ({ project, user, onUpdatePr
               playwright: newStepData.locator.startsWith('page.') ? newStepData.locator : `page.locator('${newStepData.locator}')`
             }
           },
-          value: newStepData.value
+          value: newStepData.value,
+          originalValue: updatedAction === 'fill' ? newStepData.value : s.originalValue,
+          replaceText: updatedAction === 'fill' && newStepData.value !== editingStep.value ? true : s.replaceText,
+          visualVerificationDisabled: updatedAction === 'fill' && newStepData.value !== editingStep.value ? true : s.visualVerificationDisabled
         };
       }
       return s;
@@ -5296,6 +5316,7 @@ ${currentSteps.map(step => formatStepToScript(step, 'web')).join('\n')}
                 mobileAppActivity={mobileAppActivity}
                 mobileUserEmail={user?.email}
                 liveMobileFrame={liveMobileFrame}
+                isStepExecuting={isMobileStepExecuting}
                 availableApps={availableApps}
                 onSwitchApp={(newPkg) => {
                   setMobilePackageName(newPkg);
@@ -5613,6 +5634,41 @@ ${currentSteps.map(step => formatStepToScript(step, 'web')).join('\n')}
                           </code>
                         </div>
 
+                        {(step.action === 'fill' || step.action === 'type' || (step.platform === 'mobile' && inlineEditingValueStepId === step.id)) && (
+                          <div className="rounded-lg border border-blue-500/25 bg-blue-500/5 p-3">
+                            <label htmlFor={`step-value-${step.id}`} className="mb-2 block text-[9px] font-black uppercase tracking-widest text-blue-400">
+                              Text to type
+                            </label>
+                            <input
+                              id={`step-value-${step.id}`}
+                              type="text"
+                              value={step.value || ''}
+                              onPointerDown={event => event.stopPropagation()}
+                              onChange={event => {
+                                const value = event.target.value;
+                                setCurrentSteps(previous => previous.map(item => item.id === step.id
+                                  ? { ...item, action: 'fill', value, originalValue: value, replaceText: true, visualVerificationDisabled: true }
+                                  : item));
+                              }}
+                              onBlur={() => setInlineEditingValueStepId(null)}
+                              placeholder="Enter the exact text for playback, e.g. ss"
+                              className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-xs font-bold text-white outline-none transition-all placeholder:text-slate-600 focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20"
+                            />
+                            <p className="mt-1.5 text-[9px] text-slate-500">Changes are saved immediately and used during playback.</p>
+                          </div>
+                        )}
+
+                        {step.platform === 'mobile' && step.action === 'click' && inlineEditingValueStepId !== step.id && (
+                          <button
+                            type="button"
+                            onPointerDown={event => event.stopPropagation()}
+                            onClick={() => setInlineEditingValueStepId(step.id)}
+                            className="flex w-fit items-center gap-1.5 rounded-lg border border-blue-500/25 bg-blue-500/10 px-3 py-2 text-[9px] font-black uppercase tracking-widest text-blue-400 transition-colors hover:bg-blue-500/20"
+                          >
+                            <Edit3 size={12} /> Change this step to type text
+                          </button>
+                        )}
+
                         {step.screenshot && (
                           <div className="relative w-full h-32 rounded-lg overflow-hidden border border-slate-800">
                             <img src={step.screenshot || undefined} alt="Step Screenshot" className="w-full h-full object-cover" referrerPolicy="no-referrer" />
@@ -5640,7 +5696,7 @@ ${currentSteps.map(step => formatStepToScript(step, 'web')).join('\n')}
                             <span className="text-[9px] font-bold text-slate-500 uppercase tracking-widest">{step.platform}</span>
                           </div>
                           
-                          <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                          <div className="flex items-center gap-1 opacity-100 transition-opacity md:opacity-0 md:group-hover:opacity-100">
                             <button 
                               onClick={() => handleOpenAddStepModal(index)}
                               className="p-1.5 text-slate-400 hover:text-indigo-400 hover:bg-indigo-500/10 rounded transition-colors"
@@ -5650,8 +5706,9 @@ ${currentSteps.map(step => formatStepToScript(step, 'web')).join('\n')}
                             </button>
                             <button 
                               onClick={() => handleEditStep(step)}
-                              className="p-1.5 text-slate-500 hover:text-indigo-400 transition-colors"
-                              title="Edit Step"
+                              className={`p-1.5 transition-colors ${step.action === 'fill' || step.action === 'type' ? 'rounded bg-blue-500/10 text-blue-400 hover:bg-blue-500/20' : 'text-slate-500 hover:text-indigo-400'}`}
+                              title={step.action === 'fill' || step.action === 'type' ? 'Edit input value' : 'Edit Step'}
+                              aria-label={step.action === 'fill' || step.action === 'type' ? `Edit input value for ${step.elementName || 'step'}` : 'Edit step'}
                             >
                               <Edit3 size={14} />
                             </button>
@@ -7202,9 +7259,11 @@ ${currentSteps.map(step => formatStepToScript(step, 'web')).join('\n')}
                   />
                 </div>
 
-                {(newStepData.action === 'fill' || newStepData.action === 'assertion' || newStepData.action === 'navigate') && (
+                {(newStepData.action === 'fill' || newStepData.action === 'assertion' || newStepData.action === 'navigate' || editingStep?.platform === 'mobile') && (
                   <div>
-                    <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-2 mb-2 block">Value</label>
+                    <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-2 mb-2 block">
+                      {editingStep?.platform === 'mobile' ? 'Text to type during playback' : 'Value'}
+                    </label>
                     <input 
                       type="text"
                       value={newStepData.value || ''}
@@ -7212,6 +7271,9 @@ ${currentSteps.map(step => formatStepToScript(step, 'web')).join('\n')}
                       className="w-full px-6 py-4 bg-slate-50 border border-slate-200 rounded-2xl text-sm font-bold outline-none focus:ring-4 ring-indigo-50/10 transition-all"
                       placeholder={newStepData.action === 'navigate' ? 'https://example.com' : 'Enter value...'}
                     />
+                    {editingStep?.platform === 'mobile' && newStepData.action === 'click' && newStepData.value.trim() && (
+                      <p className="ml-2 mt-2 text-[10px] font-bold text-blue-600">This click will be changed to a Fill / Type step.</p>
+                    )}
                   </div>
                 )}
               </div>

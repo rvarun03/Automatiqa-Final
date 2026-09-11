@@ -502,7 +502,10 @@ function resolveRecordedTarget(xml, params) {
   const wanted = {
     resourceId: target.resourceId || params.resourceId || (primary.type === 'resource-id' ? primary.value : '') || alternatives.find(a => a?.type === 'resource-id')?.value,
     contentDescription: target.contentDescription || target.accessibilityId || params.contentDescription || params.accessibilityId || (primary.type === 'content-desc' || primary.type === 'accessibility-id' ? primary.value : '') || alternatives.find(a => a?.type === 'content-desc' || a?.type === 'accessibility-id')?.value,
-    text: target.text || params.text || (primary.type === 'text' ? primary.value : '') || alternatives.find(a => a?.type === 'text')?.value,
+    // params.text is the value to enter for fill/type actions, never an
+    // element locator. Using it here made edited values search for a field
+    // that already contained the new text before playback typed anything.
+    text: target.text || (primary.type === 'text' ? primary.value : '') || alternatives.find(a => a?.type === 'text')?.value,
     className: target.className || params.className || ''
   };
   if (!wanted.resourceId && !wanted.contentDescription && !wanted.text && primary.type === 'coordinates') return null;
@@ -1644,8 +1647,13 @@ async function startStreamingAndCommandPolling() {
             const activeFocusedInput = activePlaybackInputTarget && focusedInput && sameEditableTarget(activePlaybackInputTarget, focusedInput)
               ? focusedInput
               : null;
+            const coordinateInput = Number.isFinite(Number(params.x)) && Number.isFinite(Number(params.y))
+              ? await getElementAtCoordinates(actionDeviceId, Number(params.x), Number(params.y), currentXml).catch(() => null)
+              : null;
             const resolvedInput = (params.useActiveInputTarget ? activeFocusedInput : null) ||
-              resolveRecordedTarget(currentXml, params) || activeFocusedInput;
+              resolveRecordedTarget(currentXml, params) ||
+              (/EditText|TextInput|AutoCompleteTextView/i.test(coordinateInput?.className || '') ? coordinateInput : null) ||
+              activeFocusedInput;
             const intended = params.useActiveInputTarget && activePlaybackInputTarget
               ? activePlaybackInputTarget
               : (params.target || params.node || {});

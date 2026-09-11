@@ -22,10 +22,12 @@ interface MobileStepCaptureOptions {
   activeScreen: string;
   liveFrame: string | null;
   captureScreenshots: boolean;
+  setExecuting: Dispatch<SetStateAction<boolean>>;
 }
 
 export function useMobileStepCapture(options: MobileStepCaptureOptions) {
   const commandQueueRef = useRef<Promise<void>>(Promise.resolve());
+  const isExecutingRef = useRef(false);
   return useCallback((
     elem: any,
     overrideAction?: string,
@@ -34,6 +36,11 @@ export function useMobileStepCapture(options: MobileStepCaptureOptions) {
     metrics?: MobileStepMetrics
   ) => {
     if (!elem) return;
+    // A physical device can take a moment to acknowledge an action. Ignore
+    // repeated touches until that action (and its resulting frame) is ready.
+    // recordOnly is the target-resolution update for the same touch, so it is
+    // intentionally allowed through while the command is running.
+    if (isExecutingRef.current && !metrics?.recordOnly) return;
     if (!options.recordingRef.current) {
       options.setRecording(true);
       options.recordingRef.current = true;
@@ -102,6 +109,8 @@ export function useMobileStepCapture(options: MobileStepCaptureOptions) {
       const actionParams = action === 'swipe'
         ? { ...metrics, recordStep: false }
         : { x, y, text: action === 'fill' ? value : undefined, resourceId: elem.resourceId, xpath: elem.xpath, bounds: elem.bounds, target: step.target, recordStep: false };
+      isExecutingRef.current = true;
+      options.setExecuting(true);
       commandQueueRef.current = commandQueueRef.current.then(async () => {
         const queued = await performMobileDeviceAction(options.email, deviceAction, actionParams);
         if (!queued?.actionId) throw new Error(`Device did not accept ${deviceAction}`);
@@ -124,7 +133,10 @@ export function useMobileStepCapture(options: MobileStepCaptureOptions) {
             ? { ...item, screenshot: capturedFrame }
             : item));
         }
-      }).catch(error => console.error('Failed to execute recorded device action:', error));
+      }).catch(error => console.error('Failed to execute recorded device action:', error)).finally(() => {
+        isExecutingRef.current = false;
+        options.setExecuting(false);
+      });
     }
     toast.success(`[+] Recorded Step: ${action.toUpperCase()} "${step.elementName}"`);
   }, [options]);
